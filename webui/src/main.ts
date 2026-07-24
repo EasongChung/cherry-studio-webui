@@ -5195,8 +5195,10 @@ const App = defineComponent({
         conversationLoadState.value = 'ready'
         conversationLoadMessage.value = conversations.value.length ? '' : text('noSessions')
         // Open WebUI / after refresh: land on the newest session when nothing is selected.
-        if (!selectedConversationId.value && conversations.value.length > 0) {
-          selectConversation(conversations.value[0].id)
+        // Guard the index access: noUncheckedIndexedAccess still types [0] as possibly undefined.
+        const latestConversation = conversations.value[0]
+        if (!selectedConversationId.value && latestConversation) {
+          selectConversation(latestConversation.id)
         }
         // If the first page does not fill the sidebar, keep loading older pages.
         await nextTick()
