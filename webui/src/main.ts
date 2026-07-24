@@ -3230,18 +3230,20 @@ const App = defineComponent({
       if (role === 'assistant') return selectedAgentName.value || role
       return role
     }
-    /** Resolve display model name for an assistant message (session snapshot → live agent). */
+    /**
+     * Model name for the assistant message header: always the turn snapshot
+     * (`message.modelId` at reply time). Do not fall back to the live agent model,
+     * so switching models later does not rewrite historical headers.
+     */
     const messageModelLabel = (message: WebUiMessageSnapshot) => {
       if (message.role !== 'assistant') return ''
-      if (message.modelId) {
-        const fromCatalog = models.value.find((model) => model.id === message.modelId)
-        if (fromCatalog?.name) return fromCatalog.name
-        const bareId = message.modelId.includes('::')
-          ? (message.modelId.split('::').pop() ?? message.modelId)
-          : message.modelId
-        return bareId
-      }
-      return selectedModel.value?.name ?? selectedAgent.value?.modelName ?? selectedAgent.value?.model ?? ''
+      if (!message.modelId) return ''
+      const fromCatalog = models.value.find((model) => model.id === message.modelId)
+      if (fromCatalog?.name) return fromCatalog.name
+      const bareId = message.modelId.includes('::')
+        ? (message.modelId.split('::').pop() ?? message.modelId)
+        : message.modelId
+      return bareId
     }
     const messageHeaderLabel = (message: WebUiMessageSnapshot) => {
       const author = messageAuthorName(message.role)
@@ -9206,12 +9208,23 @@ style.textContent = `
   }
 
 
-  .markdown-content table {
+  /* Scroll on wrapper only; table stays display:table so sparse grids keep closed borders. */
+  .markdown-content .table-wrapper {
+    display: block;
     width: 100%;
     max-width: 100%;
     margin: 0.75em 0;
-    overflow: hidden;
-    border-collapse: separate;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .markdown-content table {
+    display: table;
+    width: max-content;
+    min-width: 100%;
+    max-width: none;
+    margin: 0;
+    border-collapse: collapse;
     border-spacing: 0;
     border: 0.5px solid #d1d5db;
     border-radius: 8px;
@@ -9224,17 +9237,7 @@ style.textContent = `
     padding: 0.5em 0.75em;
     text-align: left;
     vertical-align: top;
-    border-right: 0.5px solid #d1d5db;
-    border-bottom: 0.5px solid #d1d5db;
-  }
-
-  .markdown-content th:last-child,
-  .markdown-content td:last-child {
-    border-right: none;
-  }
-
-  .markdown-content tr:last-child td {
-    border-bottom: none;
+    border: 0.5px solid #d1d5db;
   }
 
   .markdown-content th {
@@ -9244,12 +9247,6 @@ style.textContent = `
 
   .markdown-content tr:hover {
     background: #f8fafc;
-  }
-
-  .markdown-content .table-wrapper,
-  .markdown-content table {
-    display: block;
-    overflow-x: auto;
   }
 
   .process-block {
@@ -10935,14 +10932,10 @@ style.textContent = `
     border-color: #475569;
   }
 
-  :root[data-webui-theme='dark'] .markdown-content table {
-    border-color: #475569;
-  }
-
+  :root[data-webui-theme='dark'] .markdown-content table,
   :root[data-webui-theme='dark'] .markdown-content th,
   :root[data-webui-theme='dark'] .markdown-content td {
-    border-right-color: #475569;
-    border-bottom-color: #475569;
+    border-color: #475569;
   }
 
   :root[data-webui-theme='dark'] .markdown-content tr:hover {
