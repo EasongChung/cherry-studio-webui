@@ -359,13 +359,23 @@ export async function buildClaudeCodeSessionSettings(
   const skills = await buildSkillWhitelist(agent.id, cwd)
 
   // 10. Build settings
+  // Auto-compact (Claude Code SDK / headless agent sessions) — webui-branch fork-only:
+  // - autoCompactEnabled alone is NOT enough. In non-interactive (SDK) mode the binary
+  //   gates autocompact on window source ∈ {env, settings, model-default}. Without an
+  //   explicit autoCompactWindow, source falls back to "auto" and compaction is skipped.
+  // - Window is derived from the agent's model contextWindow (not a hard-coded 180k):
+  //     < 500k → ×0.9 ; ≥ 500k → ×0.5 ; missing → treat as 200k (CC default).
+  // - SDK settings schema enforces 1e5–1e6. Manual /compact is independent of this gate.
+  // - FORK-ONLY on the `webui` release branch: do NOT cherry-pick into `webui-pr` or
+  //   open/refresh an upstream PR with this change.
+  const autoCompactWindow = resolveAutoCompactWindow(resolveAgentContextWindow(agent))
   const settings: ClaudeCodeSettings = {
     cwd,
     env,
     pathToClaudeCodeExecutable: resolveClaudeExecutablePath(),
     systemPrompt,
     settingSources: getSettingSources(agent, provider),
-    settings: { autoCompactEnabled: true },
+    settings: { autoCompactEnabled: true, autoCompactWindow },
     includePartialMessages: true,
     permissionMode: agentConfig?.permission_mode,
     maxTurns: agentConfig?.max_turns,
@@ -390,6 +400,47 @@ export async function buildClaudeCodeSessionSettings(
 }
 
 // ── Subsection builders ─────────────────────────────────────────────
+
+/** Default context when the model row has no usable contextWindow (matches CC's 200k budget). */
+const AUTO_COMPACT_DEFAULT_CONTEXT_WINDOW = 200_000
+/** Split: below this use 90% headroom; at/above use 50% (large-context models). */
+const AUTO_COMPACT_LARGE_CONTEXT_THRESHOLD = 500_000
+/** Claude Code settings schema range for autoCompactWindow. */
+const AUTO_COMPACT_WINDOW_MIN = 100_000
+const AUTO_COMPACT_WINDOW_MAX = 1_000_000
+
+/**
+ * Derive `autoCompactWindow` from a model context length.
+ *
+ * - `contextWindow < 500_000` → `floor(contextWindow * 0.9)` (e.g. 200k → 180k)
+ * - `contextWindow >= 500_000` → `floor(contextWindow * 0.5)` (e.g. 1M → 500k)
+ * - missing/invalid → treat as 200k then apply the <500k branch
+ * - result clamped to SDK schema [1e5, 1e6]
+ *
+ * webui-branch fork-only — not for upstream PR.
+ */
+export function resolveAutoCompactWindow(contextWindow?: number): number {
+  const raw =
+    typeof contextWindow === 'number' && Number.isFinite(contextWindow) && contextWindow > 0
+      ? contextWindow
+      : AUTO_COMPACT_DEFAULT_CONTEXT_WINDOW
+  const ratio = raw < AUTO_COMPACT_LARGE_CONTEXT_THRESHOLD ? 0.9 : 0.5
+  const window = Math.floor(raw * ratio)
+  return Math.min(AUTO_COMPACT_WINDOW_MAX, Math.max(AUTO_COMPACT_WINDOW_MIN, window))
+}
+
+/** Read the agent primary model's declared contextWindow (undefined if missing/unresolved). */
+function resolveAgentContextWindow(agent: AgentEntity): number | undefined {
+  if (!agent.model) return undefined
+  try {
+    const { providerId, modelId } = parseUniqueModelId(agent.model)
+    const model = modelService.getByKey(providerId, modelId)
+    const value = model.contextWindow
+    return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : undefined
+  } catch {
+    return undefined
+  }
+}
 
 export function resolveClaudeExecutablePath(): string {
   const sdkRequire = createRequire(require_.resolve('@anthropic-ai/claude-agent-sdk'))
