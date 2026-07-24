@@ -5194,6 +5194,10 @@ const App = defineComponent({
         }
         conversationLoadState.value = 'ready'
         conversationLoadMessage.value = conversations.value.length ? '' : text('noSessions')
+        // Open WebUI / after refresh: land on the newest session when nothing is selected.
+        if (!selectedConversationId.value && conversations.value.length > 0) {
+          selectConversation(conversations.value[0].id)
+        }
         // If the first page does not fill the sidebar, keep loading older pages.
         await nextTick()
         const nav = conversationNav.value
@@ -5426,6 +5430,9 @@ const App = defineComponent({
         return
       }
 
+      // Drop previous send/model errors when switching sessions.
+      submitError.value = ''
+
       // Drop in-flight stream state from the previous session (avoids cross-chat delta apply / seals).
       if (chunkFrame !== undefined) {
         window.cancelAnimationFrame(chunkFrame)
@@ -5652,6 +5659,8 @@ const App = defineComponent({
 
       pendingWorkspaceSeed.value = seed
       pendingWorkspaceHint.value = options?.workspaceHint ?? workspaceSeedHint(seed, options?.group)
+      // Mobile drawer sits above the create dialog (z-index 30 > modal 20); always close it first.
+      mobileSidebarOpen.value = false
       newConversationOpen.value = true
       newConversationState.value = 'loading'
       newConversationError.value = ''
@@ -6901,11 +6910,35 @@ const App = defineComponent({
                     },
                     renderActionIcon('menu')
                   ),
-                  h('div', [
+                  h('div', { class: 'chat-header-titles' }, [
                     h('p', { class: 'eyebrow' }, [
-                      selectedConversation.value?.workspaceLabel ?? selectedAgentName.value ?? text('desktopSession'),
+                      h(
+                        'span',
+                        { class: 'chat-header-workspace' },
+                        selectedConversation.value?.workspaceLabel ?? selectedAgentName.value ?? text('desktopSession')
+                      ),
                       conversationLoadState.value === 'loading' || messageLoadState.value === 'loading'
-                        ? h('span', { class: 'header-loading-state' }, ` · ${text('loadingConversations')}`)
+                        ? h(
+                            'span',
+                            { class: 'header-loading-state' },
+                            ` · ${
+                              messageLoadState.value === 'loading'
+                                ? text('loadingMessages')
+                                : text('loadingConversations')
+                            }`
+                          )
+                        : undefined,
+                      // Composer/send/model errors surface beside the workspace label (not under the input).
+                      submitError.value
+                        ? h(
+                            'span',
+                            {
+                              class: 'chat-header-status-alert',
+                              role: 'alert',
+                              title: submitError.value
+                            },
+                            ` · ${submitError.value}`
+                          )
                         : undefined
                     ]),
                     h('h2', selectedConversation.value?.title ?? text('selectConversation'))
@@ -7434,8 +7467,7 @@ const App = defineComponent({
                         : undefined
                     ]
                   )
-                ]),
-                submitError.value ? h('p', { class: 'composer-error', role: 'alert' }, submitError.value) : undefined
+                ])
               ]),
               statusPanelOpen.value
                 ? h('button', {
@@ -8553,11 +8585,46 @@ style.textContent = `
     margin-bottom: 0;
   }
 
+  .chat-header-titles {
+    min-width: 0;
+    flex: 1 1 auto;
+  }
+
   .chat-header > div:not(.mobile-chat-actions) {
     min-width: 0;
   }
 
-  .chat-header .eyebrow,
+  .chat-header .eyebrow {
+    display: flex;
+    min-width: 0;
+    max-width: 100%;
+    gap: 0 2px;
+    align-items: baseline;
+    overflow: hidden;
+  }
+
+  .chat-header-workspace {
+    flex: 0 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .chat-header-status-alert {
+    flex: 1 1 auto;
+    min-width: 0;
+    color: #b42318;
+    font-weight: 600;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  :root[data-webui-theme='dark'] .chat-header-status-alert {
+    color: #fca5a5;
+  }
+
   .chat-header h2 {
     overflow: hidden;
     text-overflow: ellipsis;
@@ -11188,7 +11255,8 @@ style.textContent = `
 
   .modal-backdrop {
     position: fixed;
-    z-index: 20;
+    /* Above mobile conversation drawer (30) and its backdrop (29). */
+    z-index: 50;
     display: grid;
     inset: 0;
     place-items: center;
