@@ -3084,9 +3084,17 @@ const App = defineComponent({
     })
     const pendingChunks = new Map<string, WebUiChunkPayload[]>()
     const pendingChunkRetries = new Map<string, number>()
+    /** Assistant turns that finished streaming — ignore late text/reasoning deltas (prevents duplicate body after long thinking). */
+    const sealedStreamMessageIds = new Set<string>()
+    /**
+     * After the user sends, stick to the bottom for this run even if they had scrolled up.
+     * Cleared on stream done / error / abort / conversation switch.
+     */
+    const forceFollowScroll = ref(false)
     let healthTimer: number | undefined
     let contextUsageTimer: number | undefined
     let syncTimer: number | undefined
+    let streamRefreshTimer: number | undefined
     let chunkFrame: number | undefined
     let latestMessageRequest = 0
     let statusPreviewOpenTimer: number | undefined
@@ -5139,6 +5147,19 @@ const App = defineComponent({
         return
       }
 
+      // Drop in-flight stream state from the previous session (avoids cross-chat delta apply / seals).
+      if (chunkFrame !== undefined) {
+        window.cancelAnimationFrame(chunkFrame)
+        chunkFrame = undefined
+      }
+      if (streamRefreshTimer !== undefined) {
+        window.clearTimeout(streamRefreshTimer)
+        streamRefreshTimer = undefined
+      }
+      clearPendingStreamChunks()
+      sealedStreamMessageIds.clear()
+      forceFollowScroll.value = false
+
       resetWorkspaceFiles()
       selectedConversationId.value = conversationId
       mobileSidebarOpen.value = false
@@ -5345,7 +5366,40 @@ const App = defineComponent({
       }
     }
 
-    const refreshFromDesktopSync = (reason?: string, conversationId?: string) => {
+    const clearPendingStreamChunks = (messageId?: string) => {
+      if (!messageId) {
+        pendingChunks.clear()
+        pendingChunkRetries.clear()
+        return
+      }
+      pendingChunks.delete(messageId)
+      pendingChunkRetries.delete(messageId)
+    }
+
+    const sealStreamMessage = (messageId?: string) => {
+      if (!messageId) return
+      sealedStreamMessageIds.add(messageId)
+      clearPendingStreamChunks(messageId)
+    }
+
+    const isTextLikeStreamChunk = (chunk: WebUiChunkPayload['chunk']) =>
+      chunk.type === 'text-delta' || chunk.type === 'reasoning-delta'
+
+    /** Single authoritative reload after stream end; merges done + stream-terminal. */
+    const refreshMessagesAfterStream = (conversationId: string, messageId?: string) => {
+      sealStreamMessage(messageId)
+      if (streamRefreshTimer !== undefined) window.clearTimeout(streamRefreshTimer)
+      streamRefreshTimer = window.setTimeout(() => {
+        streamRefreshTimer = undefined
+        if (selectedConversationId.value !== conversationId) return
+        void loadConversationMessages(conversationId, 'refresh')
+        refreshComposerInfo(conversationId)
+        refreshSlashCommands(conversationId)
+        if (statusPanelOpen.value && rightPanelTab.value === 'files') refreshWorkspaceFiles()
+      }, 120)
+    }
+
+    const refreshFromDesktopSync = (reason?: string, conversationId?: string, messageId?: string) => {
       if (syncTimer) window.clearTimeout(syncTimer)
       syncTimer = window.setTimeout(() => {
         syncTimer = undefined
@@ -5357,10 +5411,13 @@ const App = defineComponent({
         }
         const selectedId = selectedConversationId.value
         if (selectedId && (!conversationId || conversationId === selectedId)) {
-          if (reason === 'stream-terminal' || reason === 'message-submitted' || reason === 'message-deleted') {
+          if (reason === 'stream-terminal') {
+            // Share path with SSE `done` — do not double-append via a second blind refresh race.
+            refreshMessagesAfterStream(selectedId, messageId)
+          } else if (reason === 'message-submitted' || reason === 'message-deleted') {
             void loadConversationMessages(selectedId, 'refresh')
           }
-          refreshComposerInfo(selectedId)
+          if (reason !== 'stream-terminal') refreshComposerInfo(selectedId)
         }
       }, 180)
     }
@@ -5375,10 +5432,22 @@ const App = defineComponent({
       const message = nextMessages[messageIndex]
       if (!message) return false
       const chunk = payload.chunk
+      const streamSealed =
+        sealedStreamMessageIds.has(payload.messageId) ||
+        message.status === 'success' ||
+        message.status === 'error' ||
+        message.status === 'paused'
+
       if (chunk.type === 'text-delta' && chunk.delta) {
+        // Terminal or already-authoritative rows must not keep appending (duplicate body after long thinking).
+        if (streamSealed) return true
+        if (message.content.endsWith(chunk.delta)) return true
         nextMessages[messageIndex] = { ...message, content: `${message.content}${chunk.delta}` }
       } else if (chunk.type === 'reasoning-delta' && chunk.delta) {
-        nextMessages[messageIndex] = { ...message, reasoning: `${message.reasoning ?? ''}${chunk.delta}` }
+        if (streamSealed) return true
+        const previousReasoning = message.reasoning ?? ''
+        if (previousReasoning.endsWith(chunk.delta)) return true
+        nextMessages[messageIndex] = { ...message, reasoning: `${previousReasoning}${chunk.delta}` }
       } else if (chunk.type === 'data-agent-task-event' && isWebUiAgentTaskEventData(chunk.data)) {
         const statusEvent: WebUiAgentStatusEvent = {
           kind: 'task-event',
@@ -5476,6 +5545,9 @@ const App = defineComponent({
     }
 
     const queueStreamChunk = (payload: WebUiChunkPayload) => {
+      // Drop text/reasoning for sealed turns before they enter the queue (late SSE after done).
+      if (sealedStreamMessageIds.has(payload.messageId) && isTextLikeStreamChunk(payload.chunk)) return
+
       const chunks = pendingChunks.get(payload.messageId) ?? []
       chunks.push(payload)
       pendingChunks.set(payload.messageId, chunks)
@@ -5483,12 +5555,29 @@ const App = defineComponent({
 
       chunkFrame = window.requestAnimationFrame(() => {
         chunkFrame = undefined
-        const shouldFollow = !showScrollToBottom.value
+        // Follow when user is already near the bottom, or this run forced stick-to-bottom after send.
+        const shouldFollow = forceFollowScroll.value || !showScrollToBottom.value
+        /** Only non-text tool/status chunks may reload+retry; never re-append text-delta after refresh. */
         const retryChunks: WebUiChunkPayload[] = []
         for (const queued of pendingChunks.values()) {
           for (const chunk of queued) {
+            if (sealedStreamMessageIds.has(chunk.messageId) && isTextLikeStreamChunk(chunk.chunk)) {
+              pendingChunkRetries.delete(chunk.messageId)
+              continue
+            }
             if (applyStreamChunk(chunk)) {
               pendingChunkRetries.delete(chunk.messageId)
+              continue
+            }
+            // Message row not in memory yet.
+            if (isTextLikeStreamChunk(chunk.chunk)) {
+              // Blind re-append after refresh is the main duplicate-body bug after long thinking.
+              // Refresh once to materialize the row; discard text-like deltas (server snapshot wins).
+              const retries = pendingChunkRetries.get(chunk.messageId) ?? 0
+              if (retries < 1) {
+                pendingChunkRetries.set(chunk.messageId, retries + 1)
+                retryChunks.push(chunk)
+              }
               continue
             }
             const retries = pendingChunkRetries.get(chunk.messageId) ?? 0
@@ -5502,25 +5591,94 @@ const App = defineComponent({
         if (shouldFollow) scrollMessagesToEnd()
         if (retryChunks.length > 0 && selectedConversationId.value) {
           const conversationId = selectedConversationId.value
+          const textLikeRetries = retryChunks.filter((chunk) => isTextLikeStreamChunk(chunk.chunk))
+          const toolRetries = retryChunks.filter((chunk) => !isTextLikeStreamChunk(chunk.chunk))
           void loadConversationMessages(conversationId, 'refresh').finally(() => {
-            for (const chunk of retryChunks) queueStreamChunk(chunk)
+            // After refresh, never re-apply text/reasoning deltas (would duplicate persisted body).
+            for (const chunk of textLikeRetries) {
+              pendingChunkRetries.delete(chunk.messageId)
+            }
+            for (const chunk of toolRetries) queueStreamChunk(chunk)
           })
         }
       })
     }
 
+    const distanceFromMessageStackBottom = () => {
+      const stack = messageStack.value
+      if (!stack) return Number.POSITIVE_INFINITY
+      return stack.scrollHeight - stack.scrollTop - stack.clientHeight
+    }
+
+    const syncScrollToBottomFlag = () => {
+      const stack = messageStack.value
+      if (!stack) return
+      showScrollToBottom.value = distanceFromMessageStackBottom() > 96
+    }
+
     const scrollMessagesToEnd = (behavior: ScrollBehavior = 'auto') => {
       void nextTick(() => {
         const stack = messageStack.value
-        if (stack) stack.scrollTo({ top: stack.scrollHeight, behavior })
-        showScrollToBottom.value = false
+        if (!stack) return
+        stack.scrollTo({ top: stack.scrollHeight, behavior })
+        // Re-measure after layout; smooth/auto both can leave a residual gap when height is still growing.
+        window.requestAnimationFrame(() => {
+          const live = messageStack.value
+          if (!live) return
+          if (distanceFromMessageStackBottom() > 8) {
+            live.scrollTo({ top: live.scrollHeight, behavior: 'auto' })
+          }
+          syncScrollToBottomFlag()
+        })
+      })
+    }
+
+    /**
+     * Wait until a user bubble for this send is in the message list (and preferably painted),
+     * then pin to bottom. Avoids scrolling to the previous assistant bottom during the send→visible gap.
+     */
+    const waitForUserBubbleThenScrollToEnd = async (options: {
+      readonly conversationId: string
+      readonly previousLatestUserMessageId?: string
+      readonly timeoutMs?: number
+    }) => {
+      const timeoutMs = options.timeoutMs ?? 2500
+      const started = Date.now()
+      const hasNewUserBubble = () => {
+        if (selectedConversationId.value !== options.conversationId) return false
+        for (let index = messages.value.length - 1; index >= 0; index -= 1) {
+          const message = messages.value[index]
+          if (!message || message.role !== 'user') continue
+          if (!options.previousLatestUserMessageId) return true
+          return message.id !== options.previousLatestUserMessageId
+        }
+        return false
+      }
+
+      while (!hasNewUserBubble() && Date.now() - started < timeoutMs) {
+        await loadConversationMessages(options.conversationId, 'refresh')
+        if (hasNewUserBubble()) break
+        await new Promise<void>((resolve) => window.setTimeout(resolve, 50))
+      }
+
+      // Prefer layout-stable pin over smooth (smooth often stops mid-way when height changes).
+      scrollMessagesToEnd('auto')
+      await nextTick()
+      window.requestAnimationFrame(() => {
+        scrollMessagesToEnd('auto')
+        window.requestAnimationFrame(() => scrollMessagesToEnd('auto'))
       })
     }
 
     const updateMessageScrollState = () => {
       const stack = messageStack.value
       if (!stack) return
-      showScrollToBottom.value = stack.scrollHeight - stack.scrollTop - stack.clientHeight > 96
+      // While force-following a sent turn, keep the "jump to bottom" chip suppressed if we are sticking.
+      if (forceFollowScroll.value && distanceFromMessageStackBottom() <= 96) {
+        showScrollToBottom.value = false
+      } else {
+        showScrollToBottom.value = distanceFromMessageStackBottom() > 96
+      }
       // Auto-load older pages when the user scrolls near the top (keep manual button too).
       if (stack.scrollTop <= 72 && olderMessagesCursor.value && !olderMessagesLoading.value) {
         void loadOlderMessages()
@@ -5603,6 +5761,12 @@ const App = defineComponent({
 
       submitError.value = ''
       activeRunConversationId.value = conversationId
+      // Stick to bottom for this run even if the user was reading history.
+      forceFollowScroll.value = true
+      // New user turn: allow streaming again (previous seals must not block a new assistant message id,
+      // but clear stale pending text from the last turn to avoid cross-turn re-append).
+      clearPendingStreamChunks()
+      const previousLatestUserMessageId = [...messages.value].reverse().find((message) => message.role === 'user')?.id
       try {
         const sendAttachments = await buildSendAttachments()
         await httpClient.postJson(`/api/agent-sessions/${encodeURIComponent(conversationId)}/messages`, {
@@ -5612,10 +5776,15 @@ const App = defineComponent({
         })
         composerText.value = ''
         attachments.value = []
-        await loadConversationMessages(conversationId, 'refresh')
-        scrollMessagesToEnd('smooth')
+        // Do not scroll immediately after POST: wait until the user bubble is in the list so we
+        // do not pin to the previous assistant message bottom during the send→visible delay.
+        await waitForUserBubbleThenScrollToEnd({
+          conversationId,
+          previousLatestUserMessageId
+        })
         refreshSlashCommands(conversationId)
       } catch (error) {
+        forceFollowScroll.value = false
         if (isAbortError(error)) {
           submitError.value = ''
           bridgeDetail.value = text('requestAborted')
@@ -5637,6 +5806,8 @@ const App = defineComponent({
         submitError.value = ''
         bridgeDetail.value = localizedErrorMessage(error)
         activeRunConversationId.value = undefined
+      } finally {
+        forceFollowScroll.value = false
       }
     }
 
@@ -5844,23 +6015,34 @@ const App = defineComponent({
       }
     }
 
-    const unsubscribeSync = sseClient.subscribe<{ conversationId?: string; reason?: string }>('sync', ({ data }) =>
-      refreshFromDesktopSync(data?.reason, data?.conversationId)
-    )
+    const unsubscribeSync = sseClient.subscribe<{
+      conversationId?: string
+      reason?: string
+      messageId?: string
+    }>('sync', ({ data }) => refreshFromDesktopSync(data?.reason, data?.conversationId, data?.messageId))
     const unsubscribeChunk = sseClient.subscribe<WebUiChunkPayload>('chunk', ({ data }) => {
       if (data && typeof data === 'object') queueStreamChunk(data)
     })
-    const unsubscribeDone = sseClient.subscribe<{ conversationId?: string }>('done', ({ data }) => {
+    const unsubscribeDone = sseClient.subscribe<{ conversationId?: string; messageId?: string }>('done', ({ data }) => {
       const conversationId = data?.conversationId
-      if (conversationId === activeRunConversationId.value) activeRunConversationId.value = undefined
+      if (conversationId === activeRunConversationId.value) {
+        activeRunConversationId.value = undefined
+        forceFollowScroll.value = false
+      }
       if (conversationId && conversationId === selectedConversationId.value) {
-        void loadConversationMessages(conversationId, 'refresh')
-        refreshComposerInfo(conversationId)
-        refreshSlashCommands(conversationId)
-        if (statusPanelOpen.value && rightPanelTab.value === 'files') refreshWorkspaceFiles()
+        refreshMessagesAfterStream(conversationId, data?.messageId)
+        // Final pin after terminal refresh (assistant body may still grow in the last paint).
+        scrollMessagesToEnd('auto')
+      } else {
+        sealStreamMessage(data?.messageId)
       }
     })
-    const unsubscribeError = sseClient.subscribe<{ conversationId?: string; message?: string }>('error', ({ data }) => {
+    const unsubscribeError = sseClient.subscribe<{
+      conversationId?: string
+      message?: string
+      messageId?: string
+    }>('error', ({ data }) => {
+      sealStreamMessage(data?.messageId)
       if (data?.conversationId === activeRunConversationId.value) {
         const message = localizedSseErrorMessage(data.message)
         if (isAbortSseMessage(data.message)) {
@@ -5870,6 +6052,7 @@ const App = defineComponent({
           submitError.value = message
         }
         activeRunConversationId.value = undefined
+        forceFollowScroll.value = false
       }
     })
 
@@ -5929,9 +6112,10 @@ const App = defineComponent({
       if (healthTimer) window.clearInterval(healthTimer)
       if (contextUsageTimer) window.clearInterval(contextUsageTimer)
       if (syncTimer) window.clearTimeout(syncTimer)
+      if (streamRefreshTimer !== undefined) window.clearTimeout(streamRefreshTimer)
       if (chunkFrame !== undefined) window.cancelAnimationFrame(chunkFrame)
-      pendingChunks.clear()
-      pendingChunkRetries.clear()
+      clearPendingStreamChunks()
+      sealedStreamMessageIds.clear()
       speechController.stop()
       unsubscribeSync()
       unsubscribeChunk()
@@ -8799,7 +8983,6 @@ style.textContent = `
   }
 
   .message {
-    max-width: min(680px, 86%);
     padding: 14px 16px;
     line-height: 1.6;
     background: #ffffff;
@@ -8807,8 +8990,15 @@ style.textContent = `
     border-radius: 8px;
   }
 
+  /* Assistant ~desktop 800px reading column; user stays slightly narrower. */
+  .assistant-message {
+    align-self: flex-start;
+    max-width: min(800px, 100%);
+  }
+
   .user-message {
     align-self: flex-end;
+    max-width: min(640px, 88%);
     color: #ffffff;
     background: #2563eb;
     border-color: #2563eb;
@@ -8817,10 +9007,6 @@ style.textContent = `
   .user-message ::selection {
     color: #111827;
     background: #fef08a;
-  }
-
-  .assistant-message {
-    align-self: flex-start;
   }
 
   .message p {
