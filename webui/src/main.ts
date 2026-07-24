@@ -9208,36 +9208,49 @@ style.textContent = `
   }
 
 
-  /* Scroll on wrapper only; table stays display:table so sparse grids keep closed borders. */
-  .markdown-content .table-wrapper {
-    display: block;
+  /*
+   * Desktop-aligned table chrome (src/renderer/assets/styles/markdown.css):
+   * - rounded 8px outer frame + border borders (last cell drops inner edge)
+   * - width 100% + display:table so sparse tables still fill the frame
+   *   (fixes right-edge gap from the old display:block / max-content path)
+   * - wrap cell text; no min-width / max-content so tables stay readable
+   */
+  .markdown-content table {
+    display: table;
+    box-sizing: border-box;
     width: 100%;
     max-width: 100%;
     margin: 0.75em 0;
-    overflow-x: auto;
-    -webkit-overflow-scrolling: touch;
-  }
-
-  .markdown-content table {
-    display: table;
-    width: max-content;
-    min-width: 100%;
-    max-width: none;
-    margin: 0;
-    border-collapse: collapse;
+    overflow: hidden;
+    table-layout: fixed;
+    border-collapse: separate;
     border-spacing: 0;
     border: 0.5px solid #d1d5db;
     border-radius: 8px;
-    font-size: 0.92em;
+    font-size: 0.9em;
   }
 
   .markdown-content th,
   .markdown-content td {
-    min-width: 88px;
-    padding: 0.5em 0.75em;
+    box-sizing: border-box;
+    padding: 0.5em;
     text-align: left;
     vertical-align: top;
-    border: 0.5px solid #d1d5db;
+    border-right: 0.5px solid #d1d5db;
+    border-bottom: 0.5px solid #d1d5db;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+    white-space: normal;
+    hyphens: auto;
+  }
+
+  .markdown-content th:last-child,
+  .markdown-content td:last-child {
+    border-right: none;
+  }
+
+  .markdown-content tr:last-child td {
+    border-bottom: none;
   }
 
   .markdown-content th {
@@ -10932,10 +10945,14 @@ style.textContent = `
     border-color: #475569;
   }
 
-  :root[data-webui-theme='dark'] .markdown-content table,
+  :root[data-webui-theme='dark'] .markdown-content table {
+    border-color: #475569;
+  }
+
   :root[data-webui-theme='dark'] .markdown-content th,
   :root[data-webui-theme='dark'] .markdown-content td {
-    border-color: #475569;
+    border-right-color: #475569;
+    border-bottom-color: #475569;
   }
 
   :root[data-webui-theme='dark'] .markdown-content tr:hover {

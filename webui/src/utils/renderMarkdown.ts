@@ -87,17 +87,6 @@ markdown.set({
   }
 })
 
-// Horizontal scroll belongs on a wrapper; keep `<table>` as display:table so
-// column borders meet the outer frame (content-narrow tables used to gap on the right).
-const defaultTableOpen =
-  markdown.renderer.rules.table_open ?? ((tokens, idx, options, _env, self) => self.renderToken(tokens, idx, options))
-const defaultTableClose =
-  markdown.renderer.rules.table_close ?? ((tokens, idx, options, _env, self) => self.renderToken(tokens, idx, options))
-markdown.renderer.rules.table_open = (tokens, idx, options, env, self) =>
-  `<div class="table-wrapper">${defaultTableOpen(tokens, idx, options, env, self)}`
-markdown.renderer.rules.table_close = (tokens, idx, options, env, self) =>
-  `${defaultTableClose(tokens, idx, options, env, self)}</div>`
-
 type MutableMarkdownLabels = {
   copyCodeLabel?: string
   downloadCodeLabel?: string
