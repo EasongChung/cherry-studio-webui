@@ -3356,11 +3356,6 @@ const App = defineComponent({
     const pendingChunkRetries = new Map<string, number>()
     /** Assistant turns that finished streaming — ignore late text/reasoning deltas (prevents duplicate body after long thinking). */
     const sealedStreamMessageIds = new Set<string>()
-    /**
-     * After the user sends, stick to the bottom for this run even if they had scrolled up.
-     * Cleared on stream done / error / abort / conversation switch.
-     */
-    const forceFollowScroll = ref(false)
     let healthTimer: number | undefined
     let contextUsageTimer: number | undefined
     let syncTimer: number | undefined
@@ -5446,7 +5441,6 @@ const App = defineComponent({
       }
       clearPendingStreamChunks()
       sealedStreamMessageIds.clear()
-      forceFollowScroll.value = false
 
       resetWorkspaceFiles()
       selectedConversationId.value = conversationId
@@ -5914,8 +5908,9 @@ const App = defineComponent({
 
       chunkFrame = window.requestAnimationFrame(() => {
         chunkFrame = undefined
-        // Follow when user is already near the bottom, or this run forced stick-to-bottom after send.
-        const shouldFollow = forceFollowScroll.value || !showScrollToBottom.value
+        // Follow stream only while the user stays near the bottom; scrolling up stops auto-follow.
+        // Send still one-shot pins via waitForUserBubbleThenScrollToEnd (does not force the whole run).
+        const shouldFollow = !showScrollToBottom.value
         /** Only non-text tool/status chunks may reload+retry; never re-append text-delta after refresh. */
         const retryChunks: WebUiChunkPayload[] = []
         for (const queued of pendingChunks.values()) {
@@ -6032,12 +6027,7 @@ const App = defineComponent({
     const updateMessageScrollState = () => {
       const stack = messageStack.value
       if (!stack) return
-      // While force-following a sent turn, keep the "jump to bottom" chip suppressed if we are sticking.
-      if (forceFollowScroll.value && distanceFromMessageStackBottom() <= 96) {
-        showScrollToBottom.value = false
-      } else {
-        showScrollToBottom.value = distanceFromMessageStackBottom() > 96
-      }
+      showScrollToBottom.value = distanceFromMessageStackBottom() > 96
       // Auto-load older pages when the user scrolls near the top (keep manual button too).
       if (stack.scrollTop <= 72 && olderMessagesCursor.value && !olderMessagesLoading.value) {
         void loadOlderMessages()
@@ -6120,8 +6110,6 @@ const App = defineComponent({
 
       submitError.value = ''
       activeRunConversationId.value = conversationId
-      // Stick to bottom for this run even if the user was reading history.
-      forceFollowScroll.value = true
       // New user turn: allow streaming again (previous seals must not block a new assistant message id,
       // but clear stale pending text from the last turn to avoid cross-turn re-append).
       clearPendingStreamChunks()
@@ -6135,15 +6123,14 @@ const App = defineComponent({
         })
         composerText.value = ''
         attachments.value = []
-        // Do not scroll immediately after POST: wait until the user bubble is in the list so we
-        // do not pin to the previous assistant message bottom during the send→visible delay.
+        // One-shot pin after the user bubble is visible. Stream follow after this is only while
+        // the viewport stays near the bottom; scrolling up stops auto-follow for this turn.
         await waitForUserBubbleThenScrollToEnd({
           conversationId,
           previousLatestUserMessageId
         })
         refreshSlashCommands(conversationId)
       } catch (error) {
-        forceFollowScroll.value = false
         if (isAbortError(error)) {
           submitError.value = ''
           bridgeDetail.value = text('requestAborted')
@@ -6165,8 +6152,6 @@ const App = defineComponent({
         submitError.value = ''
         bridgeDetail.value = localizedErrorMessage(error)
         activeRunConversationId.value = undefined
-      } finally {
-        forceFollowScroll.value = false
       }
     }
 
@@ -6386,12 +6371,13 @@ const App = defineComponent({
       const conversationId = data?.conversationId
       if (conversationId === activeRunConversationId.value) {
         activeRunConversationId.value = undefined
-        forceFollowScroll.value = false
       }
       if (conversationId && conversationId === selectedConversationId.value) {
+        // Capture before refresh: only pin if the user was still near the bottom.
+        const wasNearBottom = !showScrollToBottom.value
         refreshMessagesAfterStream(conversationId, data?.messageId)
-        // Final pin after terminal refresh (assistant body may still grow in the last paint).
-        scrollMessagesToEnd('auto')
+        // Final pin only when still following; do not yank users who scrolled up to read.
+        if (wasNearBottom) scrollMessagesToEnd('auto')
       } else {
         sealStreamMessage(data?.messageId)
       }
@@ -6411,7 +6397,6 @@ const App = defineComponent({
           submitError.value = message
         }
         activeRunConversationId.value = undefined
-        forceFollowScroll.value = false
       }
     })
 

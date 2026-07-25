@@ -93,7 +93,94 @@ type MutableMarkdownLabels = {
   wrapLinesLabel?: string
 }
 
+/**
+ * Preprocess incomplete GFM table syntax so markdown-it can render it during streaming.
+ * markdown-it requires complete table syntax (header + separator + optional body rows);
+ * this function pads the last incomplete row with trailing `|` and empty cells, and
+ * adds a minimal separator if one is missing. Does NOT modify the original source.
+ */
+const preprocessTable = (source: string): string => {
+  const lines = source.split('\n')
+
+  // Find the last line that looks like a table row (starts with |).
+  let lastTableRow = -1
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const trimmed = lines[i]?.trim() ?? ''
+    if (trimmed.startsWith('|')) {
+      lastTableRow = i
+      break
+    }
+    // Empty lines between table and end are OK; other content breaks the table block.
+    if (trimmed !== '') break
+  }
+
+  if (lastTableRow < 0) return source
+
+  // Find the first line of this table block (consecutive |-prefixed lines upward).
+  let firstTableRow = lastTableRow
+  while (firstTableRow > 0) {
+    const trimmed = lines[firstTableRow - 1]?.trim() ?? ''
+    if (trimmed.startsWith('|')) {
+      firstTableRow--
+    } else {
+      break
+    }
+  }
+
+  // Count columns from the header row (first table row).
+  const header = lines[firstTableRow]
+  if (!header) return source
+  const headerCells = header.split('|').filter((cell) => cell.trim() !== '').length
+  if (headerCells === 0) return source
+
+  // Check if a separator row (|---|) already exists.
+  let hasSeparator = false
+  for (let i = firstTableRow + 1; i <= lastTableRow; i++) {
+    const trimmed = lines[i]?.trim() ?? ''
+    if (/^\|[\s\-:]+\|?$/.test(trimmed) && trimmed.includes('-')) {
+      hasSeparator = true
+      break
+    }
+  }
+
+  // Clone so we can modify the display copy without touching the original source.
+  const result = [...lines]
+  const lastLine = result[lastTableRow]
+  if (!lastLine) return source
+
+  const trimmed = lastLine.trim()
+
+  // 1. Ensure the last line ends with | (closes the last cell).
+  let fixedLine = trimmed
+  if (!fixedLine.endsWith('|')) {
+    fixedLine = `${fixedLine} |`
+  }
+
+  // 2. Count cells in the fixed last line; pad with empty cells if fewer than header.
+  const cells = fixedLine.split('|').filter((cell) => cell.trim() !== '')
+  while (cells.length < headerCells) {
+    cells.push('')
+    fixedLine = `${fixedLine}  |`
+  }
+
+  // Preserve original indentation (margin/blockquote context).
+  const indent = lastLine.match(/^\s*/)?.[0] ?? ''
+  result[lastTableRow] = `${indent}${fixedLine}`
+
+  // 3. If the table has only a header (no separator yet), insert a minimal separator
+  //    so markdown-it renders the table immediately instead of waiting for the next chunk.
+  if (!hasSeparator && firstTableRow === lastTableRow) {
+    const sep = `| ${Array.from({ length: headerCells }, () => '---').join(' | ')} |`
+    result.splice(firstTableRow + 1, 0, sep)
+  }
+
+  return result.join('\n')
+}
+
 export const renderMarkdown = (source: string, options: RenderMarkdownOptions = {}) => {
+  // Preprocess incomplete table syntax for streaming; markdown-it requires complete tables.
+  // This is a display-only transformation — the original source is never modified.
+  const displaySource = preprocessTable(source)
   // Labels are stashed on the shared markdown-it options object for the fence renderer.
   const markdownOptions = markdown.options as typeof markdown.options & MutableMarkdownLabels
   const previousCopyCodeLabel = markdownOptions.copyCodeLabel
@@ -103,7 +190,7 @@ export const renderMarkdown = (source: string, options: RenderMarkdownOptions = 
   markdownOptions.downloadCodeLabel = options.downloadCodeLabel
   markdownOptions.wrapLinesLabel = options.wrapLinesLabel
   try {
-    return markdown.render(source)
+    return markdown.render(displaySource)
   } finally {
     markdownOptions.copyCodeLabel = previousCopyCodeLabel
     markdownOptions.downloadCodeLabel = previousDownloadCodeLabel
