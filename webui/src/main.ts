@@ -3271,6 +3271,7 @@ const App = defineComponent({
     const messageLoadMessage = ref('')
     const composerText = ref('')
     const submitError = ref('')
+    const pendingSubmittedTurnCount = ref(0)
     const agents = ref<readonly WebUiAgentEntity[]>([])
     const modelGroups = ref<readonly WebUiModelGroup[]>([])
     const newConversationOpen = ref(false)
@@ -6100,16 +6101,11 @@ const App = defineComponent({
     const submitMessage = async () => {
       const conversationId = selectedConversationId.value
       const messageText = composerText.value.trim()
-      if (
-        !conversationId ||
-        (!messageText && attachments.value.length === 0) ||
-        activeRunConversationId.value ||
-        pendingToolApproval.value
-      )
-        return
+      if (!conversationId || (!messageText && attachments.value.length === 0) || pendingToolApproval.value) return
 
       submitError.value = ''
       activeRunConversationId.value = conversationId
+      pendingSubmittedTurnCount.value += 1
       // New user turn: allow streaming again (previous seals must not block a new assistant message id,
       // but clear stale pending text from the last turn to avoid cross-turn re-append).
       clearPendingStreamChunks()
@@ -6131,14 +6127,15 @@ const App = defineComponent({
         })
         refreshSlashCommands(conversationId)
       } catch (error) {
+        pendingSubmittedTurnCount.value = Math.max(0, pendingSubmittedTurnCount.value - 1)
         if (isAbortError(error)) {
           submitError.value = ''
           bridgeDetail.value = text('requestAborted')
-          activeRunConversationId.value = undefined
+          if (pendingSubmittedTurnCount.value === 0) activeRunConversationId.value = undefined
           return
         }
         submitError.value = error instanceof DOMException ? text('attachmentReadFailed') : localizedErrorMessage(error)
-        activeRunConversationId.value = undefined
+        if (pendingSubmittedTurnCount.value === 0) activeRunConversationId.value = undefined
       }
     }
 
@@ -6152,6 +6149,7 @@ const App = defineComponent({
         submitError.value = ''
         bridgeDetail.value = localizedErrorMessage(error)
         activeRunConversationId.value = undefined
+        pendingSubmittedTurnCount.value = 0
       }
     }
 
@@ -6369,7 +6367,8 @@ const App = defineComponent({
     })
     const unsubscribeDone = sseClient.subscribe<{ conversationId?: string; messageId?: string }>('done', ({ data }) => {
       const conversationId = data?.conversationId
-      if (conversationId === activeRunConversationId.value) {
+      pendingSubmittedTurnCount.value = Math.max(0, pendingSubmittedTurnCount.value - 1)
+      if (pendingSubmittedTurnCount.value === 0 && conversationId === activeRunConversationId.value) {
         activeRunConversationId.value = undefined
       }
       if (conversationId && conversationId === selectedConversationId.value) {
@@ -6396,7 +6395,8 @@ const App = defineComponent({
         } else {
           submitError.value = message
         }
-        activeRunConversationId.value = undefined
+        pendingSubmittedTurnCount.value = Math.max(0, pendingSubmittedTurnCount.value - 1)
+        if (pendingSubmittedTurnCount.value === 0) activeRunConversationId.value = undefined
       }
     })
 
@@ -7326,7 +7326,23 @@ const App = defineComponent({
                           renderActionIcon(
                             activeRunConversationId.value === selectedConversationId.value ? 'stop' : 'send'
                           )
-                        )
+                        ),
+                        activeRunConversationId.value === selectedConversationId.value
+                          ? h(
+                              'button',
+                              {
+                                class: 'send-button followup-send-button',
+                                type: 'button',
+                                disabled:
+                                  !selectedConversation.value ||
+                                  (!composerText.value.trim() && attachments.value.length === 0),
+                                title: text('send'),
+                                'aria-label': text('send'),
+                                onClick: () => void submitMessage()
+                              },
+                              renderActionIcon('send')
+                            )
+                          : undefined
                       ]),
                       reasoningPickerOpen.value
                         ? h(
@@ -11013,6 +11029,11 @@ style.textContent = `
   .send-button-is-stop {
     color: #ffffff;
     background: #dc2626;
+  }
+
+  .followup-send-button {
+    color: #ffffff;
+    background: #111827;
   }
 
   .model-picker-menu,
