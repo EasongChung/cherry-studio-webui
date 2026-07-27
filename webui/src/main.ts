@@ -3272,6 +3272,7 @@ const App = defineComponent({
     const composerText = ref('')
     const submitError = ref('')
     const pendingSubmittedTurnCount = ref(0)
+    const queuedFollowups = ref<{ id: string; text: string }[]>([])
     const agents = ref<readonly WebUiAgentEntity[]>([])
     const modelGroups = ref<readonly WebUiModelGroup[]>([])
     const newConversationOpen = ref(false)
@@ -6103,6 +6104,14 @@ const App = defineComponent({
       const messageText = composerText.value.trim()
       if (!conversationId || (!messageText && attachments.value.length === 0) || pendingToolApproval.value) return
 
+      // If assistant is currently streaming, queue the message instead of POSTing.
+      if (activeRunConversationId.value === conversationId) {
+        queuedFollowups.value = [...queuedFollowups.value, { id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, text: messageText }]
+        composerText.value = ''
+        attachments.value = []
+        return
+      }
+
       submitError.value = ''
       activeRunConversationId.value = conversationId
       pendingSubmittedTurnCount.value += 1
@@ -6137,6 +6146,27 @@ const App = defineComponent({
         submitError.value = error instanceof DOMException ? text('attachmentReadFailed') : localizedErrorMessage(error)
         if (pendingSubmittedTurnCount.value === 0) activeRunConversationId.value = undefined
       }
+    }
+
+    const flushQueuedFollowup = () => {
+      if (queuedFollowups.value.length === 0 || activeRunConversationId.value) return
+      const next = queuedFollowups.value[0]
+      if (!next) return
+      queuedFollowups.value = queuedFollowups.value.slice(1)
+      composerText.value = next.text
+      void submitMessage()
+    }
+
+    const steerQueuedFollowup = (id: string) => {
+      const item = queuedFollowups.value.find((q) => q.id === id)
+      if (!item) return
+      queuedFollowups.value = queuedFollowups.value.filter((q) => q.id !== id)
+      composerText.value = item.text
+      void submitMessage()
+    }
+
+    const removeQueuedFollowup = (id: string) => {
+      queuedFollowups.value = queuedFollowups.value.filter((q) => q.id !== id)
     }
 
     const abortMessage = async () => {
@@ -6238,6 +6268,31 @@ const App = defineComponent({
           ])
         )
       ])
+
+    const renderQueuedFollowupDock = () => {
+      if (!queuedFollowups.value.length) return undefined
+      return h('div', { class: 'queued-followup-dock' }, queuedFollowups.value.map((item) =>
+        h('div', { class: 'queued-followup-item', key: item.id }, [
+          h('span', { class: 'queued-followup-text' }, item.text),
+          h('button', {
+            class: 'queued-followup-steer',
+            type: 'button',
+            title: 'Steer',
+            onClick: () => steerQueuedFollowup(item.id)
+          }, h('svg', { viewBox: '0 0 24 24', 'aria-hidden': 'true', style: { width: '14px', height: '14px' } }, [
+            h('path', { d: 'M5 12h14M12 5l7 7-7 7' })
+          ])),
+          h('button', {
+            class: 'queued-followup-cancel',
+            type: 'button',
+            title: '',
+            onClick: () => removeQueuedFollowup(item.id)
+          }, h('svg', { viewBox: '0 0 24 24', 'aria-hidden': 'true', style: { width: '14px', height: '14px' } }, [
+            h('path', { d: 'M18 6 6 18M6 6l12 12' })
+          ]))
+        ])
+      ))
+    }
 
     const copyText = async (value: string) => {
       try {
@@ -6377,6 +6432,8 @@ const App = defineComponent({
         refreshMessagesAfterStream(conversationId, data?.messageId)
         // Final pin only when still following; do not yank users who scrolled up to read.
         if (wasNearBottom) scrollMessagesToEnd('auto')
+        // Auto-drain the next queued follow-up once the stream fully settles.
+        if (pendingSubmittedTurnCount.value === 0) flushQueuedFollowup()
       } else {
         sealStreamMessage(data?.messageId)
       }
@@ -7102,6 +7159,7 @@ const App = defineComponent({
                       renderActionIcon('down')
                     )
                   : undefined,
+                renderQueuedFollowupDock(),
                 h('footer', { class: 'composer' }, [
                   renderPermissionRequestPanel(),
                   h(
@@ -7152,7 +7210,6 @@ const App = defineComponent({
                         ref: composerTextarea,
                         disabled:
                           !selectedConversation.value ||
-                          activeRunConversationId.value === selectedConversationId.value ||
                           Boolean(pendingToolApproval.value),
                         value: composerText.value,
                         placeholder: pendingToolApproval.value
@@ -7297,7 +7354,12 @@ const App = defineComponent({
                           {
                             class: [
                               'send-button',
-                              { 'send-button-is-stop': activeRunConversationId.value === selectedConversationId.value }
+                              {
+                                'send-button-is-stop':
+                                  activeRunConversationId.value === selectedConversationId.value &&
+                                  !composerText.value.trim() &&
+                                  attachments.value.length === 0
+                              }
                             ],
                             type: 'button',
                             disabled:
@@ -7308,15 +7370,23 @@ const App = defineComponent({
                                 attachments.value.length === 0 &&
                                 activeRunConversationId.value !== selectedConversationId.value),
                             'aria-label':
-                              activeRunConversationId.value === selectedConversationId.value
+                              activeRunConversationId.value === selectedConversationId.value &&
+                              !composerText.value.trim() &&
+                              attachments.value.length === 0
                                 ? text('stop')
                                 : text('send'),
                             title:
-                              activeRunConversationId.value === selectedConversationId.value
+                              activeRunConversationId.value === selectedConversationId.value &&
+                              !composerText.value.trim() &&
+                              attachments.value.length === 0
                                 ? text('stop')
                                 : text('send'),
                             onClick: () => {
-                              if (activeRunConversationId.value === selectedConversationId.value) {
+                              if (
+                                activeRunConversationId.value === selectedConversationId.value &&
+                                !composerText.value.trim() &&
+                                attachments.value.length === 0
+                              ) {
                                 void abortMessage()
                                 return
                               }
@@ -7324,25 +7394,13 @@ const App = defineComponent({
                             }
                           },
                           renderActionIcon(
-                            activeRunConversationId.value === selectedConversationId.value ? 'stop' : 'send'
+                            activeRunConversationId.value === selectedConversationId.value &&
+                            !composerText.value.trim() &&
+                            attachments.value.length === 0
+                              ? 'stop'
+                              : 'send'
                           )
-                        ),
-                        activeRunConversationId.value === selectedConversationId.value
-                          ? h(
-                              'button',
-                              {
-                                class: 'send-button followup-send-button',
-                                type: 'button',
-                                disabled:
-                                  !selectedConversation.value ||
-                                  (!composerText.value.trim() && attachments.value.length === 0),
-                                title: text('send'),
-                                'aria-label': text('send'),
-                                onClick: () => void submitMessage()
-                              },
-                              renderActionIcon('send')
-                            )
-                          : undefined
+                        )
                       ]),
                       reasoningPickerOpen.value
                         ? h(
@@ -11034,6 +11092,79 @@ style.textContent = `
   .followup-send-button {
     color: #ffffff;
     background: #111827;
+  }
+
+  .queued-followup-dock {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 8px 12px;
+    background: #f8fafc;
+    border-bottom: 1px solid #e2e8f0;
+  }
+
+  .queued-followup-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 8px;
+    background: #ffffff;
+    border: 1px solid #e2e8f0;
+    border-radius: 6px;
+  }
+
+  .queued-followup-text {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 13px;
+    color: #334155;
+  }
+
+  .queued-followup-steer,
+  .queued-followup-cancel {
+    display: grid;
+    width: 24px;
+    height: 24px;
+    padding: 0;
+    place-items: center;
+    color: #64748b;
+    background: transparent;
+    border: 0;
+    border-radius: 4px;
+    cursor: pointer;
+  }
+
+  .queued-followup-steer:hover,
+  .queued-followup-cancel:hover {
+    color: #0f172a;
+    background: #e2e8f0;
+  }
+
+  :root[data-webui-theme='dark'] .queued-followup-dock {
+    background: #1e293b;
+    border-color: #334155;
+  }
+
+  :root[data-webui-theme='dark'] .queued-followup-item {
+    background: #0f172a;
+    border-color: #334155;
+  }
+
+  :root[data-webui-theme='dark'] .queued-followup-text {
+    color: #e2e8f0;
+  }
+
+  :root[data-webui-theme='dark'] .queued-followup-steer,
+  :root[data-webui-theme='dark'] .queued-followup-cancel {
+    color: #94a3b8;
+  }
+  :root[data-webui-theme='dark'] .queued-followup-steer:hover,
+  :root[data-webui-theme='dark'] .queued-followup-cancel:hover {
+    color: #f1f5f9;
+    background: #334155;
   }
 
   .model-picker-menu,
