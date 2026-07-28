@@ -6277,19 +6277,25 @@ const App = defineComponent({
           h('button', {
             class: 'queued-followup-steer',
             type: 'button',
-            title: 'Steer',
+            title: text('send'),
             onClick: () => steerQueuedFollowup(item.id)
-          }, h('svg', { viewBox: '0 0 24 24', 'aria-hidden': 'true', style: { width: '14px', height: '14px' } }, [
-            h('path', { d: 'M5 12h14M12 5l7 7-7 7' })
-          ])),
+          }, [
+            h('svg', { viewBox: '0 0 24 24', 'aria-hidden': 'true' }, [
+              h('path', { d: 'M5 12h14M12 5l7 7-7 7' })
+            ]),
+            h('span', { class: 'queued-followup-label' }, text('send'))
+          ]),
           h('button', {
             class: 'queued-followup-cancel',
             type: 'button',
-            title: '',
+            title: text('delete'),
             onClick: () => removeQueuedFollowup(item.id)
-          }, h('svg', { viewBox: '0 0 24 24', 'aria-hidden': 'true', style: { width: '14px', height: '14px' } }, [
-            h('path', { d: 'M18 6 6 18M6 6l12 12' })
-          ]))
+          }, [
+            h('svg', { viewBox: '0 0 24 24', 'aria-hidden': 'true' }, [
+              h('path', { d: 'M18 6 6 18M6 6l12 12' })
+            ]),
+            h('span', { class: 'queued-followup-label' }, text('delete'))
+          ])
         ])
       ))
     }
@@ -11089,11 +11095,6 @@ style.textContent = `
     background: #dc2626;
   }
 
-  .followup-send-button {
-    color: #ffffff;
-    background: #111827;
-  }
-
   .queued-followup-dock {
     display: flex;
     flex-direction: column;
@@ -11106,7 +11107,7 @@ style.textContent = `
   .queued-followup-item {
     display: flex;
     align-items: center;
-    gap: 6px;
+    gap: 4px;
     padding: 6px 8px;
     background: #ffffff;
     border: 1px solid #e2e8f0;
@@ -11125,22 +11126,36 @@ style.textContent = `
 
   .queued-followup-steer,
   .queued-followup-cancel {
-    display: grid;
-    width: 24px;
-    height: 24px;
-    padding: 0;
-    place-items: center;
-    color: #64748b;
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+    height: 26px;
+    padding: 0 6px;
+    color: #475569;
+    font-size: 12px;
     background: transparent;
-    border: 0;
+    border: 1px solid #e2e8f0;
     border-radius: 4px;
     cursor: pointer;
+    white-space: nowrap;
+  }
+
+  .queued-followup-steer svg,
+  .queued-followup-cancel svg {
+    width: 14px;
+    height: 14px;
+    display: block;
+  }
+
+  .queued-followup-label {
+    line-height: 1;
   }
 
   .queued-followup-steer:hover,
   .queued-followup-cancel:hover {
     color: #0f172a;
-    background: #e2e8f0;
+    background: #f1f5f9;
+    border-color: #94a3b8;
   }
 
   :root[data-webui-theme='dark'] .queued-followup-dock {
@@ -11160,11 +11175,13 @@ style.textContent = `
   :root[data-webui-theme='dark'] .queued-followup-steer,
   :root[data-webui-theme='dark'] .queued-followup-cancel {
     color: #94a3b8;
+    border-color: #334155;
   }
   :root[data-webui-theme='dark'] .queued-followup-steer:hover,
   :root[data-webui-theme='dark'] .queued-followup-cancel:hover {
     color: #f1f5f9;
     background: #334155;
+    border-color: #64748b;
   }
 
   .model-picker-menu,
