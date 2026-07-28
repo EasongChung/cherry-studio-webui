@@ -6277,11 +6277,11 @@ const App = defineComponent({
           h('button', {
             class: 'queued-followup-steer',
             type: 'button',
-            title: text('send'),
+            title: '引导',
             onClick: () => steerQueuedFollowup(item.id)
           }, [
             h('svg', { viewBox: '0 0 24 24', 'aria-hidden': 'true' }, [
-              h('path', { d: 'M5 12h14M12 5l7 7-7 7' })
+              h('path', { d: 'M12 5v14M5 12l7-7 7 7' })
             ]),
             h('span', { class: 'queued-followup-label' }, text('send'))
           ]),
