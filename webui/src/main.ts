@@ -6106,7 +6106,10 @@ const App = defineComponent({
 
       // If assistant is currently streaming and not forced, queue the message instead of POSTing.
       if (activeRunConversationId.value === conversationId && !options?.force) {
-        queuedFollowups.value = [...queuedFollowups.value, { id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, text: messageText }]
+        queuedFollowups.value = [
+          ...queuedFollowups.value,
+          { id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, text: messageText }
+        ]
         composerText.value = ''
         attachments.value = []
         return
@@ -6271,33 +6274,35 @@ const App = defineComponent({
 
     const renderQueuedFollowupDock = () => {
       if (!queuedFollowups.value.length) return undefined
-      return h('div', { class: 'queued-followup-dock' }, queuedFollowups.value.map((item) =>
-        h('div', { class: 'queued-followup-item', key: item.id }, [
-          h('span', { class: 'queued-followup-text' }, item.text),
-          h('button', {
-            class: 'queued-followup-steer',
-            type: 'button',
-            title: '引导',
-            onClick: () => steerQueuedFollowup(item.id)
-          }, [
-            h('svg', { viewBox: '0 0 24 24', 'aria-hidden': 'true' }, [
-              h('path', { d: 'M12 5v14M5 12l7-7 7 7' })
-            ]),
-            h('span', { class: 'queued-followup-label' }, text('send'))
-          ]),
-          h('button', {
-            class: 'queued-followup-cancel',
-            type: 'button',
-            title: text('delete'),
-            onClick: () => removeQueuedFollowup(item.id)
-          }, [
-            h('svg', { viewBox: '0 0 24 24', 'aria-hidden': 'true' }, [
-              h('path', { d: 'M18 6 6 18M6 6l12 12' })
-            ]),
-            h('span', { class: 'queued-followup-label' }, text('delete'))
+      return h(
+        'div',
+        { class: 'queued-followup-dock' },
+        queuedFollowups.value.map((item) =>
+          h('div', { class: 'queued-followup-item', key: item.id }, [
+            h('span', { class: 'queued-followup-text' }, item.text),
+            h(
+              'button',
+              {
+                class: 'queued-followup-steer',
+                type: 'button',
+                title: '引导',
+                onClick: () => steerQueuedFollowup(item.id)
+              },
+              [h('span', { class: 'queued-followup-label' }, '引导')]
+            ),
+            h(
+              'button',
+              {
+                class: 'queued-followup-cancel',
+                type: 'button',
+                title: text('delete'),
+                onClick: () => removeQueuedFollowup(item.id)
+              },
+              [h('span', { class: 'queued-followup-label' }, text('delete'))]
+            )
           ])
-        ])
-      ))
+        )
+      )
     }
 
     const copyText = async (value: string) => {
@@ -7214,9 +7219,7 @@ const App = defineComponent({
                         : undefined,
                       h('textarea', {
                         ref: composerTextarea,
-                        disabled:
-                          !selectedConversation.value ||
-                          Boolean(pendingToolApproval.value),
+                        disabled: !selectedConversation.value || Boolean(pendingToolApproval.value),
                         value: composerText.value,
                         placeholder: pendingToolApproval.value
                           ? text('toolPermissionConfirmation')
@@ -7401,8 +7404,8 @@ const App = defineComponent({
                           },
                           renderActionIcon(
                             activeRunConversationId.value === selectedConversationId.value &&
-                            !composerText.value.trim() &&
-                            attachments.value.length === 0
+                              !composerText.value.trim() &&
+                              attachments.value.length === 0
                               ? 'stop'
                               : 'send'
                           )
@@ -11135,13 +11138,6 @@ style.textContent = `
     border-radius: 5px;
     cursor: pointer;
     white-space: nowrap;
-  }
-
-  .queued-followup-steer svg,
-  .queued-followup-cancel svg {
-    width: 14px;
-    height: 14px;
-    display: block;
   }
 
   .queued-followup-label {
