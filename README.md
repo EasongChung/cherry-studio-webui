@@ -61,7 +61,9 @@
  <a href="https://www.producthunt.com/posts/cherry-studio?embed=true&utm_source=badge-featured&utm_medium=badge&utm_souce=badge-cherry&#0045;studio" target="_blank"><img src="https://api.producthunt.com/widgets/embed-image/v1/featured.svg?post_id=496640&theme=light" alt="Cherry&#0032;Studio - AI&#0032;Chatbots&#0044;&#0032;AI&#0032;Desktop&#0032;Client | Product Hunt" width="220" height="55" /></a>
 </div>
 
-# 🍒 Cherry Studio
+# 🍒 Cherry Studio WebUI
+
+> ⚠️ **非官方分支**：本仓库是基于 [Cherry Studio](https://github.com/CherryHQ/cherry-studio) 的社区 fork，在官方版本基础上增加了 **WebUI 频道**（Win11 桌面端远程延伸），支持通过浏览器访问和管理桌面 Agent 会话。非 Cherry Studio 官方出品。
 
 Cherry Studio is a desktop client that supports multiple LLM providers, available on Windows, Mac and Linux.
 

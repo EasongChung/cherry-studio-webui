@@ -46,6 +46,12 @@ vi.mock('react-i18next', () => ({
   })
 }))
 
+vi.mock('react-i18next', () => ({
+  useTranslation: () => ({
+    t: (key: string) => (key === 'agent.builtin.cherry_assistant.description' ? 'Advisor 诊断 helper' : key)
+  })
+}))
+
 function listResult(data: unknown[]) {
   return {
     data,

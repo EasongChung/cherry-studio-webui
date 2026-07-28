@@ -155,9 +155,6 @@ export type UseCacheSchema = {
   /** Whether translating input text */
   'translate.translating': CacheValueTypes.TranslatingState
 
-  // Assistant reasoning effort cache (per-assistant, not persisted to DB)
-  'assistant.reasoning_effort_cache.${assistantId}': string | undefined
-
   // Painting in-flight generation state, keyed by paintingId. Survives page
   // navigation so the spinner reappears when the user returns mid-run.
   'painting.generation.${paintingId}': CacheValueTypes.CachePaintingGenerationState | null
@@ -228,9 +225,6 @@ export const DefaultUseCache: UseCacheSchema = {
     abortKey: null
   },
 
-  // Assistant reasoning effort cache
-  'assistant.reasoning_effort_cache.${assistantId}': undefined,
-
   'painting.generation.${paintingId}': null,
 
   // Template key examples (for testing and demonstration)
@@ -263,6 +257,9 @@ export type SharedCacheSchema = {
   // API gateway  runtime running state.
   'feature.api_gateway.running': boolean
   'feature.binary.latest_versions': Record<string, string>
+  // WebUI desktop bridge availability and runtime state.
+  'feature.webui.running': boolean
+  'feature.webui.supported': boolean
   // API key rotation state (cross-window, tracks last used key per provider)
   'web_search.provider.last_used_key.${providerId}': string
   'ocr.provider.last_used_key.${providerId}': string
@@ -293,6 +290,8 @@ export const DefaultSharedCache: SharedCacheSchema = {
   'feature.openclaw.gateway_status': 'stopped',
   'feature.api_gateway.running': false,
   'feature.binary.latest_versions': {},
+  'feature.webui.running': false,
+  'feature.webui.supported': false,
   'web_search.provider.last_used_key.${providerId}': '',
   'ocr.provider.last_used_key.${providerId}': '',
   // Template defaults are placeholders never consumed at runtime — concrete
@@ -308,6 +307,10 @@ export const DefaultSharedCache: SharedCacheSchema = {
  */
 export type RendererPersistCacheSchema = {
   'ui.tab.pinned_tabs': CacheValueTypes.Tab[]
+  // Open (unpinned) tabs and the active tab id, persisted so the tab session is restored on
+  // restart. Main window only — written from TabsContext, gated on includePinnedTabs.
+  'ui.tab.normal_tabs': CacheValueTypes.Tab[]
+  'ui.tab.active_tab_id': string
   'ui.global_search.recent_items': CacheValueTypes.GlobalSearchRecentEntry[]
   'ui.sidebar.docked_tabs': CacheValueTypes.Tab[]
   'ui.sidebar.width': number
@@ -335,8 +338,6 @@ export type RendererPersistCacheSchema = {
   'ui.agent.session.expansion.agent': string[] | null
   'ui.agent.session.expansion.workdir': string[] | null
   'settings.provider.last_selected_provider_id': string | null
-  'feature.mcp.is_uv_installed': boolean
-  'feature.mcp.is_bun_installed': boolean
   // MCP marketplace "available servers" fetched per provider; re-fetchable, so cached not stored
   'feature.mcp.provider_available_servers': CacheValueTypes.McpAvailableServers
   'agent.open_external_app.last_used_target': CacheValueTypes.AgentOpenExternalAppTarget
@@ -346,6 +347,8 @@ export type RendererPersistCacheSchema = {
 
 export const DefaultRendererPersistCache: RendererPersistCacheSchema = {
   'ui.tab.pinned_tabs': [],
+  'ui.tab.normal_tabs': [],
+  'ui.tab.active_tab_id': '',
   'ui.global_search.recent_items': [],
   'ui.sidebar.docked_tabs': [],
   'ui.sidebar.width': 50, // keep in sync with SIDEBAR_ICON_WIDTH (renderer Sidebar/constants.ts)
@@ -365,8 +368,6 @@ export const DefaultRendererPersistCache: RendererPersistCacheSchema = {
   'ui.agent.session.expansion.agent': null,
   'ui.agent.session.expansion.workdir': null,
   'settings.provider.last_selected_provider_id': null,
-  'feature.mcp.is_uv_installed': false,
-  'feature.mcp.is_bun_installed': false,
   'feature.mcp.provider_available_servers': {},
   'agent.open_external_app.last_used_target': null,
   'ui.emoji.recently_used': []

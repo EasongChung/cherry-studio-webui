@@ -30,6 +30,16 @@ Window-level side effects (subscriptions, DOM sync that must live for the window
 
 Do **not** fold main-only behavior into `useWindowRuntime` (a per-window difference would need a config flag — the smell), and do not push non-first-frame work into `prepareWindow`.
 
+## Window runtime leaf
+
+Window-level side effects (subscriptions, DOM sync that must live for the window's lifetime) go in a small runtime-leaf component the L2 `XxxApp` mounts **inside the providers but outside every `TabRouter`/`<Activity>`** — a hidden `<Activity>` subtree destroys effects, so anything mounted under a tab would lose its subscription when that tab is backgrounded.
+
+- **Full-chrome windows (main + subWindow)** call `useWindowRuntime()` — the shared window runtime (locale, dayjs, custom CSS, root background, app-path snapshot, fullscreen, topic/agent auto-rename). Its membership rule is strict: a concern belongs there **only** if both windows need it identically. It takes no config and holds no main-only behavior, so it can't hide a per-window difference — the line between it and the retired `useAppInit` grab-bag.
+- **Main-only** concerns stay in `MainWindowRuntime`, explicitly outside `useWindowRuntime`: the boot spinner + `init` timer teardown (paired with markup only `main/index.html` creates), `useAppUpdateHandler`, `useStorageMonitorNotification`.
+- **Light windows** (`quickAssistant` / `selection-action` / `selection-toolbar`) don't use `useWindowRuntime` (they render no localized dates, no chrome). They mount `useLanguageSync` + custom CSS only; `selection-toolbar` strips background declarations first (`stripBackgroundCss`). `useLanguageSync` / `useCustomCss` stay their own hooks precisely because the light windows reuse them.
+
+Do **not** fold main-only behavior into `useWindowRuntime` (a per-window difference would need a config flag — the smell), and do not push non-first-frame work into `prepareWindow`.
+
 ## Logger Window Source
 
 Each window declares its logger source **declaratively** in its `index.html`, not via a call in `entryPoint.tsx`:

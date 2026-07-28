@@ -80,7 +80,8 @@ vi.mock('lucide-react', () => ({
   Search: () => <span data-testid="search-icon" />,
   ToolCase: () => <span data-testid="tool-case-icon" />,
   Trash2: () => <span data-testid="trash-icon" />,
-  X: () => <span data-testid="x-icon" />
+  X: () => <span data-testid="x-icon" />,
+  Zap: () => <span data-testid="zap-icon" />
 }))
 
 vi.mock('react-i18next', () => ({
