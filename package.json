@@ -1,12 +1,12 @@
 {
-  "name": "CherryStudio",
+  "name": "CherryStudioWebUI",
   "version": "2.0.0-beta.1",
   "private": true,
-  "description": "A powerful AI assistant for producer.",
-  "desktopName": "CherryStudio.desktop",
+  "description": "Cherry Studio WebUI - Unofficial fork with WebUI channel support.",
+  "desktopName": "CherryStudioWebUI.desktop",
   "main": "./out/main/main.js",
   "author": "support@cherry-ai.com",
-  "homepage": "https://github.com/CherryHQ/cherry-studio",
+  "homepage": "https://github.com/EasongChung/cherry-studio",
   "engines": {
     "node": ">=24.11.1 <24.16.0"
   },
