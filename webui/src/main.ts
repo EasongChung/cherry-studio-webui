@@ -6099,13 +6099,13 @@ const App = defineComponent({
         }))
       )
 
-    const submitMessage = async () => {
+    const submitMessage = async (options?: { force?: boolean }) => {
       const conversationId = selectedConversationId.value
       const messageText = composerText.value.trim()
       if (!conversationId || (!messageText && attachments.value.length === 0) || pendingToolApproval.value) return
 
-      // If assistant is currently streaming, queue the message instead of POSTing.
-      if (activeRunConversationId.value === conversationId) {
+      // If assistant is currently streaming and not forced, queue the message instead of POSTing.
+      if (activeRunConversationId.value === conversationId && !options?.force) {
         queuedFollowups.value = [...queuedFollowups.value, { id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, text: messageText }]
         composerText.value = ''
         attachments.value = []
@@ -6162,7 +6162,7 @@ const App = defineComponent({
       if (!item) return
       queuedFollowups.value = queuedFollowups.value.filter((q) => q.id !== id)
       composerText.value = item.text
-      void submitMessage()
+      void submitMessage({ force: true })
     }
 
     const removeQueuedFollowup = (id: string) => {
