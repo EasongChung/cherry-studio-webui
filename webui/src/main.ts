@@ -5335,7 +5335,7 @@ const App = defineComponent({
 
     const loadAgents = async () => {
       const page = await httpClient.getJson<WebUiOffsetResponse<WebUiAgentEntity>>('/api/data/agents')
-      agents.value = page.items.filter((agent) => Boolean(agent.model))
+      agents.value = page.items
     }
 
     const loadModels = async () => {
@@ -10646,7 +10646,6 @@ style.textContent = `
   .attachment-chip {
     display: inline-flex;
     min-width: 0;
-    max-width: 220px;
     align-items: center;
     color: inherit;
     font-size: 12px;
@@ -10871,9 +10870,8 @@ style.textContent = `
   }
 
   .attachment-chip-name {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+    overflow: visible;
+    min-width: 0;
   }
 
   .attachment-chip button {
