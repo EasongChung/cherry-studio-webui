@@ -3271,6 +3271,8 @@ const App = defineComponent({
     const messageLoadMessage = ref('')
     const composerText = ref('')
     const submitError = ref('')
+    const pendingSubmittedTurnCount = ref(0)
+    const queuedFollowups = ref<{ id: string; text: string }[]>([])
     const agents = ref<readonly WebUiAgentEntity[]>([])
     const modelGroups = ref<readonly WebUiModelGroup[]>([])
     const newConversationOpen = ref(false)
@@ -3356,11 +3358,6 @@ const App = defineComponent({
     const pendingChunkRetries = new Map<string, number>()
     /** Assistant turns that finished streaming — ignore late text/reasoning deltas (prevents duplicate body after long thinking). */
     const sealedStreamMessageIds = new Set<string>()
-    /**
-     * After the user sends, stick to the bottom for this run even if they had scrolled up.
-     * Cleared on stream done / error / abort / conversation switch.
-     */
-    const forceFollowScroll = ref(false)
     let healthTimer: number | undefined
     let contextUsageTimer: number | undefined
     let syncTimer: number | undefined
@@ -5338,7 +5335,7 @@ const App = defineComponent({
 
     const loadAgents = async () => {
       const page = await httpClient.getJson<WebUiOffsetResponse<WebUiAgentEntity>>('/api/data/agents')
-      agents.value = page.items.filter((agent) => Boolean(agent.model))
+      agents.value = page.items
     }
 
     const loadModels = async () => {
@@ -5446,7 +5443,6 @@ const App = defineComponent({
       }
       clearPendingStreamChunks()
       sealedStreamMessageIds.clear()
-      forceFollowScroll.value = false
 
       resetWorkspaceFiles()
       selectedConversationId.value = conversationId
@@ -5914,8 +5910,9 @@ const App = defineComponent({
 
       chunkFrame = window.requestAnimationFrame(() => {
         chunkFrame = undefined
-        // Follow when user is already near the bottom, or this run forced stick-to-bottom after send.
-        const shouldFollow = forceFollowScroll.value || !showScrollToBottom.value
+        // Follow stream only while the user stays near the bottom; scrolling up stops auto-follow.
+        // Send still one-shot pins via waitForUserBubbleThenScrollToEnd (does not force the whole run).
+        const shouldFollow = !showScrollToBottom.value
         /** Only non-text tool/status chunks may reload+retry; never re-append text-delta after refresh. */
         const retryChunks: WebUiChunkPayload[] = []
         for (const queued of pendingChunks.values()) {
@@ -6032,12 +6029,7 @@ const App = defineComponent({
     const updateMessageScrollState = () => {
       const stack = messageStack.value
       if (!stack) return
-      // While force-following a sent turn, keep the "jump to bottom" chip suppressed if we are sticking.
-      if (forceFollowScroll.value && distanceFromMessageStackBottom() <= 96) {
-        showScrollToBottom.value = false
-      } else {
-        showScrollToBottom.value = distanceFromMessageStackBottom() > 96
-      }
+      showScrollToBottom.value = distanceFromMessageStackBottom() > 96
       // Auto-load older pages when the user scrolls near the top (keep manual button too).
       if (stack.scrollTop <= 72 && olderMessagesCursor.value && !olderMessagesLoading.value) {
         void loadOlderMessages()
@@ -6107,21 +6099,22 @@ const App = defineComponent({
         }))
       )
 
-    const submitMessage = async () => {
+    const submitMessage = async (options?: { force?: boolean }) => {
       const conversationId = selectedConversationId.value
       const messageText = composerText.value.trim()
-      if (
-        !conversationId ||
-        (!messageText && attachments.value.length === 0) ||
-        activeRunConversationId.value ||
-        pendingToolApproval.value
-      )
+      if (!conversationId || (!messageText && attachments.value.length === 0) || pendingToolApproval.value) return
+
+      // If assistant is currently streaming and not forced, queue the message instead of POSTing.
+      if (activeRunConversationId.value === conversationId && !options?.force) {
+        queuedFollowups.value = [...queuedFollowups.value, { id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, text: messageText }]
+        composerText.value = ''
+        attachments.value = []
         return
+      }
 
       submitError.value = ''
       activeRunConversationId.value = conversationId
-      // Stick to bottom for this run even if the user was reading history.
-      forceFollowScroll.value = true
+      pendingSubmittedTurnCount.value += 1
       // New user turn: allow streaming again (previous seals must not block a new assistant message id,
       // but clear stale pending text from the last turn to avoid cross-turn re-append).
       clearPendingStreamChunks()
@@ -6135,24 +6128,45 @@ const App = defineComponent({
         })
         composerText.value = ''
         attachments.value = []
-        // Do not scroll immediately after POST: wait until the user bubble is in the list so we
-        // do not pin to the previous assistant message bottom during the send→visible delay.
+        // One-shot pin after the user bubble is visible. Stream follow after this is only while
+        // the viewport stays near the bottom; scrolling up stops auto-follow for this turn.
         await waitForUserBubbleThenScrollToEnd({
           conversationId,
           previousLatestUserMessageId
         })
         refreshSlashCommands(conversationId)
       } catch (error) {
-        forceFollowScroll.value = false
+        pendingSubmittedTurnCount.value = Math.max(0, pendingSubmittedTurnCount.value - 1)
         if (isAbortError(error)) {
           submitError.value = ''
           bridgeDetail.value = text('requestAborted')
-          activeRunConversationId.value = undefined
+          if (pendingSubmittedTurnCount.value === 0) activeRunConversationId.value = undefined
           return
         }
         submitError.value = error instanceof DOMException ? text('attachmentReadFailed') : localizedErrorMessage(error)
-        activeRunConversationId.value = undefined
+        if (pendingSubmittedTurnCount.value === 0) activeRunConversationId.value = undefined
       }
+    }
+
+    const flushQueuedFollowup = () => {
+      if (queuedFollowups.value.length === 0 || activeRunConversationId.value) return
+      const next = queuedFollowups.value[0]
+      if (!next) return
+      queuedFollowups.value = queuedFollowups.value.slice(1)
+      composerText.value = next.text
+      void submitMessage()
+    }
+
+    const steerQueuedFollowup = (id: string) => {
+      const item = queuedFollowups.value.find((q) => q.id === id)
+      if (!item) return
+      queuedFollowups.value = queuedFollowups.value.filter((q) => q.id !== id)
+      composerText.value = item.text
+      void submitMessage({ force: true })
+    }
+
+    const removeQueuedFollowup = (id: string) => {
+      queuedFollowups.value = queuedFollowups.value.filter((q) => q.id !== id)
     }
 
     const abortMessage = async () => {
@@ -6165,8 +6179,7 @@ const App = defineComponent({
         submitError.value = ''
         bridgeDetail.value = localizedErrorMessage(error)
         activeRunConversationId.value = undefined
-      } finally {
-        forceFollowScroll.value = false
+        pendingSubmittedTurnCount.value = 0
       }
     }
 
@@ -6255,6 +6268,37 @@ const App = defineComponent({
           ])
         )
       ])
+
+    const renderQueuedFollowupDock = () => {
+      if (!queuedFollowups.value.length) return undefined
+      return h('div', { class: 'queued-followup-dock' }, queuedFollowups.value.map((item) =>
+        h('div', { class: 'queued-followup-item', key: item.id }, [
+          h('span', { class: 'queued-followup-text' }, item.text),
+          h('button', {
+            class: 'queued-followup-steer',
+            type: 'button',
+            title: '引导',
+            onClick: () => steerQueuedFollowup(item.id)
+          }, [
+            h('svg', { viewBox: '0 0 24 24', 'aria-hidden': 'true' }, [
+              h('path', { d: 'M12 5v14M5 12l7-7 7 7' })
+            ]),
+            h('span', { class: 'queued-followup-label' }, text('send'))
+          ]),
+          h('button', {
+            class: 'queued-followup-cancel',
+            type: 'button',
+            title: text('delete'),
+            onClick: () => removeQueuedFollowup(item.id)
+          }, [
+            h('svg', { viewBox: '0 0 24 24', 'aria-hidden': 'true' }, [
+              h('path', { d: 'M18 6 6 18M6 6l12 12' })
+            ]),
+            h('span', { class: 'queued-followup-label' }, text('delete'))
+          ])
+        ])
+      ))
+    }
 
     const copyText = async (value: string) => {
       try {
@@ -6384,14 +6428,18 @@ const App = defineComponent({
     })
     const unsubscribeDone = sseClient.subscribe<{ conversationId?: string; messageId?: string }>('done', ({ data }) => {
       const conversationId = data?.conversationId
-      if (conversationId === activeRunConversationId.value) {
+      pendingSubmittedTurnCount.value = Math.max(0, pendingSubmittedTurnCount.value - 1)
+      if (pendingSubmittedTurnCount.value === 0 && conversationId === activeRunConversationId.value) {
         activeRunConversationId.value = undefined
-        forceFollowScroll.value = false
       }
       if (conversationId && conversationId === selectedConversationId.value) {
+        // Capture before refresh: only pin if the user was still near the bottom.
+        const wasNearBottom = !showScrollToBottom.value
         refreshMessagesAfterStream(conversationId, data?.messageId)
-        // Final pin after terminal refresh (assistant body may still grow in the last paint).
-        scrollMessagesToEnd('auto')
+        // Final pin only when still following; do not yank users who scrolled up to read.
+        if (wasNearBottom) scrollMessagesToEnd('auto')
+        // Auto-drain the next queued follow-up once the stream fully settles.
+        if (pendingSubmittedTurnCount.value === 0) flushQueuedFollowup()
       } else {
         sealStreamMessage(data?.messageId)
       }
@@ -6410,8 +6458,8 @@ const App = defineComponent({
         } else {
           submitError.value = message
         }
-        activeRunConversationId.value = undefined
-        forceFollowScroll.value = false
+        pendingSubmittedTurnCount.value = Math.max(0, pendingSubmittedTurnCount.value - 1)
+        if (pendingSubmittedTurnCount.value === 0) activeRunConversationId.value = undefined
       }
     })
 
@@ -7117,6 +7165,7 @@ const App = defineComponent({
                       renderActionIcon('down')
                     )
                   : undefined,
+                renderQueuedFollowupDock(),
                 h('footer', { class: 'composer' }, [
                   renderPermissionRequestPanel(),
                   h(
@@ -7167,7 +7216,6 @@ const App = defineComponent({
                         ref: composerTextarea,
                         disabled:
                           !selectedConversation.value ||
-                          activeRunConversationId.value === selectedConversationId.value ||
                           Boolean(pendingToolApproval.value),
                         value: composerText.value,
                         placeholder: pendingToolApproval.value
@@ -7312,7 +7360,12 @@ const App = defineComponent({
                           {
                             class: [
                               'send-button',
-                              { 'send-button-is-stop': activeRunConversationId.value === selectedConversationId.value }
+                              {
+                                'send-button-is-stop':
+                                  activeRunConversationId.value === selectedConversationId.value &&
+                                  !composerText.value.trim() &&
+                                  attachments.value.length === 0
+                              }
                             ],
                             type: 'button',
                             disabled:
@@ -7323,15 +7376,23 @@ const App = defineComponent({
                                 attachments.value.length === 0 &&
                                 activeRunConversationId.value !== selectedConversationId.value),
                             'aria-label':
-                              activeRunConversationId.value === selectedConversationId.value
+                              activeRunConversationId.value === selectedConversationId.value &&
+                              !composerText.value.trim() &&
+                              attachments.value.length === 0
                                 ? text('stop')
                                 : text('send'),
                             title:
-                              activeRunConversationId.value === selectedConversationId.value
+                              activeRunConversationId.value === selectedConversationId.value &&
+                              !composerText.value.trim() &&
+                              attachments.value.length === 0
                                 ? text('stop')
                                 : text('send'),
                             onClick: () => {
-                              if (activeRunConversationId.value === selectedConversationId.value) {
+                              if (
+                                activeRunConversationId.value === selectedConversationId.value &&
+                                !composerText.value.trim() &&
+                                attachments.value.length === 0
+                              ) {
                                 void abortMessage()
                                 return
                               }
@@ -7339,7 +7400,11 @@ const App = defineComponent({
                             }
                           },
                           renderActionIcon(
-                            activeRunConversationId.value === selectedConversationId.value ? 'stop' : 'send'
+                            activeRunConversationId.value === selectedConversationId.value &&
+                            !composerText.value.trim() &&
+                            attachments.value.length === 0
+                              ? 'stop'
+                              : 'send'
                           )
                         )
                       ]),
@@ -10581,7 +10646,6 @@ style.textContent = `
   .attachment-chip {
     display: inline-flex;
     min-width: 0;
-    max-width: 220px;
     align-items: center;
     color: inherit;
     font-size: 12px;
@@ -10806,9 +10870,8 @@ style.textContent = `
   }
 
   .attachment-chip-name {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+    overflow: visible;
+    min-width: 0;
   }
 
   .attachment-chip button {
@@ -11028,6 +11091,93 @@ style.textContent = `
   .send-button-is-stop {
     color: #ffffff;
     background: #dc2626;
+  }
+
+  .queued-followup-dock {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 8px 12px;
+    background: #f8fafc;
+    border-bottom: 1px solid #e2e8f0;
+  }
+
+  .queued-followup-item {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 6px 8px;
+    background: #ffffff;
+    border: 1px solid #e2e8f0;
+    border-radius: 6px;
+  }
+
+  .queued-followup-text {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 13px;
+    color: #334155;
+  }
+
+  .queued-followup-steer,
+  .queued-followup-cancel {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    height: 28px;
+    padding: 0 8px;
+    font-size: 12px;
+    font-weight: 600;
+    border: 0;
+    border-radius: 5px;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+
+  .queued-followup-steer svg,
+  .queued-followup-cancel svg {
+    width: 14px;
+    height: 14px;
+    display: block;
+  }
+
+  .queued-followup-label {
+    line-height: 1;
+  }
+
+  .queued-followup-steer {
+    color: #ffffff;
+    background: #2563eb;
+  }
+
+  .queued-followup-steer:hover {
+    background: #1d4ed8;
+  }
+
+  .queued-followup-cancel {
+    color: #ffffff;
+    background: #dc2626;
+  }
+
+  .queued-followup-cancel:hover {
+    background: #b91c1c;
+  }
+
+  :root[data-webui-theme='dark'] .queued-followup-dock {
+    background: #1e293b;
+    border-color: #334155;
+  }
+
+  :root[data-webui-theme='dark'] .queued-followup-item {
+    background: #0f172a;
+    border-color: #334155;
+  }
+
+  :root[data-webui-theme='dark'] .queued-followup-text {
+    color: #e2e8f0;
   }
 
   .model-picker-menu,
