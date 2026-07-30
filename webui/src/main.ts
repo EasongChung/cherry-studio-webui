@@ -9880,6 +9880,7 @@ style.textContent = `
 
   .markdown-content {
     overflow-wrap: anywhere;
+    overflow-x: auto;
   }
 
   .markdown-content > :first-child {
@@ -10105,20 +10106,21 @@ style.textContent = `
 
 
   /*
-   * Desktop-aligned table chrome (src/renderer/assets/styles/markdown.css):
+   * Desktop-aligned table column-width strategy (src/renderer components/chat/messages/markdown/Table.tsx):
+   * - table-layout: auto so columns size to content (short columns get less space, long columns get more)
+   * - min-width: 640px (same as desktop min-w-160) ensures tables are always readable
+   * - width: 100% so sparse tables still fill the frame
+   * - overflow: hidden on table for border-radius clipping; parent .markdown-content handles scroll
    * - rounded 8px outer frame + border borders (last cell drops inner edge)
-   * - width 100% + display:table so sparse tables still fill the frame
-   *   (fixes right-edge gap from the old display:block / max-content path)
-   * - wrap cell text; no min-width / max-content so tables stay readable
    */
   .markdown-content table {
     display: table;
     box-sizing: border-box;
     width: 100%;
-    max-width: 100%;
+    min-width: 640px;
     margin: 0.75em 0;
     overflow: hidden;
-    table-layout: fixed;
+    table-layout: auto;
     border-collapse: separate;
     border-spacing: 0;
     border: 0.5px solid #d1d5db;
