@@ -7,8 +7,10 @@ import type {
   MessageStreamingLayers,
   MessageToolApprovalInput
 } from '@renderer/components/chat/messages/types'
+import { invalidateCachedMessageUiStates } from '@renderer/components/chat/messages/utils/messageUiStateCache'
 import type { ComposerContextValue } from '@renderer/components/composer/ComposerContext'
 import { useToolApprovalComposerOverrides } from '@renderer/components/composer/useToolApprovalComposerOverrides'
+import type { AgentComposerSendOptions } from '@renderer/components/composer/variants/AgentComposer'
 import { useAgentSessionParts } from '@renderer/hooks/useAgentSessionParts'
 import { useChatWithHistory } from '@renderer/hooks/useChatWithHistory'
 import {
@@ -23,7 +25,6 @@ import { buildAgentSessionTopicId } from '@renderer/utils/agentSession'
 import { mergeMessagesById } from '@renderer/utils/message/mergeMessagesById'
 import type { AiStreamOpenRequest, AiToolApprovalRespondResponse } from '@shared/ai/transport'
 import type { CherryMessagePart, CherryUIMessage } from '@shared/data/types/message'
-import type { ReasoningEffortOption } from '@shared/types/aiSdk'
 import { isToolUIPart } from 'ai'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 
@@ -35,7 +36,7 @@ type AskUserQuestionApprovalPart = CherryMessagePart & {
   output?: unknown
 }
 
-export type AgentSendOptions = { body?: Record<string, unknown> }
+export type AgentSendOptions = AgentComposerSendOptions
 
 export interface AgentTurnInput {
   text: string
@@ -43,7 +44,7 @@ export interface AgentTurnInput {
 }
 
 export function getAgentTurnParts(input: AgentTurnInput): CherryMessagePart[] {
-  const parts = input.options?.body?.userMessageParts as CherryMessagePart[] | undefined
+  const parts = input.options?.body?.userMessageParts
   return parts ?? (input.text ? [{ type: 'text', text: input.text }] : [])
 }
 
@@ -177,7 +178,8 @@ export function useAgentChatRuntimeState({
       trigger: 'submit-message',
       topicId: conversation.topicId,
       userMessageParts: getAgentTurnParts(input),
-      reasoningEffort: input.options?.body?.reasoningEffort as ReasoningEffortOption | undefined
+      reasoningEffort: input.options?.body?.reasoningEffort,
+      ...(input.options?.body?.fastMode === true ? { fastMode: true } : {})
     }),
     []
   )
@@ -196,6 +198,7 @@ export function useAgentChatRuntimeState({
   const deleteMessage = useCallback(
     async (messageId: string) => {
       await deleteSessionMessage(messageId)
+      invalidateCachedMessageUiStates([messageId])
       setMessages((current) => current.filter((message) => message.id !== messageId))
     },
     [deleteSessionMessage, setMessages]
