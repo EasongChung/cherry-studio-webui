@@ -160,7 +160,7 @@
 
   .conversation-group-toggle {
     display: grid;
-    grid-template-columns: 14px 16px minmax(0, 1fr) auto;
+    grid-template-columns: 18px 20px minmax(0, 1fr) auto;
     gap: 6px;
     align-items: center;
     min-width: 0;
@@ -188,9 +188,9 @@
   .conversation-group-chevron {
     display: inline-grid;
     place-items: center;
-    width: 14px;
+    width: 18px;
     color: #94a3b8;
-    font-size: 10px;
+    font-size: 14px;
     line-height: 1;
     transition: transform 0.12s ease;
   }
@@ -202,8 +202,8 @@
   .conversation-group-icon {
     display: inline-grid;
     place-items: center;
-    width: 16px;
-    font-size: 12px;
+    width: 20px;
+    font-size: 16px;
     line-height: 1;
   }
 
@@ -248,6 +248,48 @@
     display: grid;
     gap: 2px;
     padding-left: 4px;
+  }
+
+  .conversation-group-footer {
+    padding: 2px 0 6px 4px;
+  }
+
+  .conversation-group-show-more-button {
+    display: flex;
+    align-items: center;
+    justify-content: flex-start;
+    gap: 4px;
+    width: 100%;
+    min-height: 26px;
+    padding: 0 6px;
+    color: #64748b;
+    font-size: 12px;
+    background: transparent;
+    border: 0;
+    border-radius: 6px;
+    cursor: pointer;
+  }
+
+  .conversation-group-show-more-button:hover,
+  .conversation-group-show-more-button:focus-visible {
+    color: #0f172a;
+    background: rgb(148 163 184 / 14%);
+    outline: 0;
+  }
+
+  .conversation-group-show-more-chevron {
+    display: inline-grid;
+    place-items: center;
+    transition: transform 0.12s ease;
+  }
+
+  .conversation-group-show-more-open .conversation-group-show-more-chevron {
+    transform: rotate(180deg);
+  }
+
+  .conversation-group-show-more-button .conversation-group-show-more-chevron svg {
+    width: 14px;
+    height: 14px;
   }
 
   .create-workspace-hint {
@@ -671,11 +713,6 @@
     border: 1px solid var(--webui-divider);
     border-radius: 6px;
     cursor: pointer;
-  }
-
-  .load-older-conversations-button {
-    width: 100%;
-    margin: 4px 0 8px;
   }
 
   .scroll-bottom-button {
@@ -4736,10 +4773,15 @@
       max-height: 148px;
     }
 
+    .markdown-content table {
+      min-width: 0;
+      font-size: 0.85em;
+    }
+
     .markdown-content th,
     .markdown-content td {
-      min-width: 76px;
-      padding: 7px 8px;
+      min-width: 0;
+      padding: 6px 8px;
       font-size: 13px;
     }
 

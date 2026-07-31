@@ -64,6 +64,7 @@ import {
   composerKeyboardStep,
   composerMaxHeight,
   composerMinHeight,
+  conversationGroupDefaultVisibleCount,
   conversationLoadHardCap,
   conversationPageSize,
   fallbackLanguage,
@@ -247,6 +248,8 @@ const App = defineComponent({
     const conversationNav = ref<HTMLElement>()
     const olderConversationsCursor = ref<string>()
     const olderConversationsLoading = ref(false)
+    /** Workdir groups whose conversations are fully expanded (show-more opened); collapsed groups cap at the default count. */
+    const expandedConversationGroupIds = ref(new Set<string>())
     const showScrollToBottom = ref(false)
     const composerHeight = ref(composerDefaultHeight)
     const deleteMessageId = ref<string>()
@@ -1979,7 +1982,8 @@ const App = defineComponent({
         if (!selectedConversationId.value && latestConversation) {
           selectConversation(latestConversation.id)
         }
-        // If the first page does not fill the sidebar, keep loading older pages.
+        // Fill the sidebar until the viewport is full; groups beyond the default visible
+        // count stay collapsed behind their per-group "show more" footer button.
         await nextTick()
         const nav = conversationNav.value
         if (olderConversationsCursor.value && nav && nav.scrollHeight <= nav.clientHeight + 8) {
@@ -2201,7 +2205,11 @@ const App = defineComponent({
       closeConversationMenu()
       statusPreviewOpen.value = false
       const target = conversations.value.find((conversation) => conversation.id === conversationId)
-      if (target) expandWorkdirGroup(conversationGroupKey(target))
+      if (target) {
+        expandWorkdirGroup(conversationGroupKey(target))
+        // Ensure a selected session hidden behind a collapsed group footer is revealed.
+        expandConversationGroup(conversationGroupKey(target))
+      }
       if (conversationId === selectedConversationId.value) {
         mobileSidebarOpen.value = false
         void loadConversationMessages(conversationId, 'refresh')
@@ -2426,6 +2434,20 @@ const App = defineComponent({
       next.delete(groupId)
       collapsedWorkdirGroupIds.value = next
       persistCollapsedWorkdirGroups(next)
+    }
+
+    const toggleConversationGroupExpanded = (groupId: string) => {
+      const next = new Set(expandedConversationGroupIds.value)
+      if (next.has(groupId)) next.delete(groupId)
+      else next.add(groupId)
+      expandedConversationGroupIds.value = next
+    }
+
+    const expandConversationGroup = (groupId: string) => {
+      if (expandedConversationGroupIds.value.has(groupId)) return
+      const next = new Set(expandedConversationGroupIds.value)
+      next.add(groupId)
+      expandedConversationGroupIds.value = next
     }
 
     const openNewConversation = async (options?: {
@@ -3465,6 +3487,16 @@ const App = defineComponent({
                         const collapsed = isWorkdirGroupCollapsed(group.id)
                         const createLabel =
                           group.kind === 'user' ? text('createInWorkspace') : text('createInNoProject')
+                        const groupExpanded = expandedConversationGroupIds.value.has(group.id)
+                        const totalCount = group.conversations.length
+                        const visibleConversations = groupExpanded
+                          ? group.conversations
+                          : group.conversations.slice(0, conversationGroupDefaultVisibleCount)
+                        // Mirrors the desktop per-group "show more / collapse" footer button:
+                        // no button while the group fits the default count, and expanded
+                        // groups with more than the default can collapse back to it.
+                        const groupHasMore = totalCount > conversationGroupDefaultVisibleCount
+                        const groupCanCollapse = groupExpanded && groupHasMore
                         return [
                           h(
                             'div',
@@ -3532,7 +3564,7 @@ const App = defineComponent({
                                       'aria-label': createLabel,
                                       onClick: (event: Event) => openNewConversationInGroup(group, event)
                                     },
-                                    '+'
+                                    renderComposerToolIcon('newConversation')
                                   )
                                 ]
                               ),
@@ -3541,7 +3573,7 @@ const App = defineComponent({
                                 : h(
                                     'div',
                                     { class: 'conversation-group-items' },
-                                    group.conversations.map((conversation) =>
+                                    visibleConversations.map((conversation) =>
                                       h(
                                         'div',
                                         {
@@ -3673,25 +3705,40 @@ const App = defineComponent({
                                         ]
                                       )
                                     )
+                                  ),
+                              groupHasMore && !collapsed
+                                ? h(
+                                    'div',
+                                    { class: 'conversation-group-footer' },
+                                    h(
+                                      'button',
+                                      {
+                                        class: [
+                                          'conversation-group-show-more-button',
+                                          { 'conversation-group-show-more-open': groupCanCollapse }
+                                        ],
+                                        type: 'button',
+                                        'aria-expanded': groupExpanded,
+                                        onClick: () => toggleConversationGroupExpanded(group.id)
+                                      },
+                                      [
+                                        h(
+                                          'span',
+                                          {
+                                            class: 'conversation-group-show-more-chevron',
+                                            'aria-hidden': 'true'
+                                          },
+                                          renderActionIcon('down')
+                                        ),
+                                        h('span', groupCanCollapse ? text('collapseGroupMore') : text('showMoreGroup'))
+                                      ]
+                                    )
                                   )
+                                : undefined
                             ]
                           )
                         ]
-                      }),
-                      olderConversationsCursor.value
-                        ? h(
-                            'button',
-                            {
-                              class: 'load-older-button load-older-conversations-button',
-                              type: 'button',
-                              disabled: olderConversationsLoading.value,
-                              onClick: () => void loadOlderConversations()
-                            },
-                            olderConversationsLoading.value
-                              ? text('loadingOlderConversations')
-                              : text('loadOlderConversations')
-                          )
-                        : undefined
+                      })
                     ]
                   ),
                   conversationActionError.value

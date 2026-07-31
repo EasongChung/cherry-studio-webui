@@ -8,6 +8,8 @@ export const messagePageSize = 10
 export const conversationPageSize = 50
 /** Stop auto-filling older sessions so the sidebar stays responsive. */
 export const conversationLoadHardCap = 500
+/** Per-workdir group: default conversations shown before its "show more / collapse" footer button appears. */
+export const conversationGroupDefaultVisibleCount = 8
 export const conversationGroupNoProjectId = 'group:no-project'
 export const collapsedWorkdirGroupsStorageKey = 'cherry-webui.collapsed-workdir-groups'
 export const maxAttachmentCount = 5
