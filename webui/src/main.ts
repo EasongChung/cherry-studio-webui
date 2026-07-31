@@ -14,7 +14,7 @@ import {
   watch
 } from 'vue'
 
-import AuthPanel from './components/AuthPanel.vue'
+import AuthPanel, { type RememberVerifyOption } from './components/AuthPanel.vue'
 import PermissionRequestPanel from './components/PermissionRequestPanel.vue'
 import ToolCallBlock from './components/ToolCallBlock.vue'
 import { createWebUiHttpClient, WebUiHttpError } from './service/httpClient'
@@ -41,6 +41,7 @@ import type {
   WebUiOffsetResponse,
   WebUiPermissionMode,
   WebUiPermissionModeResponse,
+  WebUiPreferencesResponse,
   WebUiRole,
   WebUiSendAttachment,
   WebUiSlashCommand,
@@ -173,6 +174,13 @@ const App = defineComponent({
     const isAuthenticated = ref(true)
     const authKeyDraft = ref('')
     const authError = ref('')
+    const REMEMBER_VERIFY_SECONDS: Readonly<Record<Exclude<RememberVerifyOption, 'off'>, number>> = {
+      '3h': 3 * 60 * 60,
+      '1d': 24 * 60 * 60,
+      '1w': 7 * 24 * 60 * 60
+    }
+    const rememberVerify = ref<RememberVerifyOption>('off')
+    const showEstimatedTokens = ref(false)
     const userName = ref('')
     const bridgeDetail = ref('')
     const appVersion = ref('')
@@ -239,6 +247,8 @@ const App = defineComponent({
     const themeMode = ref<'light' | 'dark'>(
       window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
     )
+    /** Coarse pointer (touchscreen / mobile): Enter must insert a newline instead of sending. */
+    const isCoarsePointer = window.matchMedia('(pointer: coarse)').matches
     const messageStack = ref<HTMLElement>()
     const composerTextarea = ref<HTMLTextAreaElement>()
     const attachmentInput = ref<HTMLInputElement>()
@@ -1980,7 +1990,9 @@ const App = defineComponent({
         // Guard the index access: noUncheckedIndexedAccess still types [0] as possibly undefined.
         const latestConversation = conversations.value[0]
         if (!selectedConversationId.value && latestConversation) {
-          selectConversation(latestConversation.id)
+          // Auto-open the newest session without expanding its per-group show-more footer,
+          // so a refreshed sidebar stays collapsed until the user explicitly expands it.
+          selectConversation(latestConversation.id, { reveal: false })
         }
         // Fill the sidebar until the viewport is full; groups beyond the default visible
         // count stay collapsed behind their per-group "show more" footer button.
@@ -2200,15 +2212,16 @@ const App = defineComponent({
         })
     }
 
-    const selectConversation = (conversationId: string) => {
+    const selectConversation = (conversationId: string, options?: { reveal?: boolean }) => {
       clearStatusPreviewTimers()
       closeConversationMenu()
       statusPreviewOpen.value = false
       const target = conversations.value.find((conversation) => conversation.id === conversationId)
       if (target) {
         expandWorkdirGroup(conversationGroupKey(target))
-        // Ensure a selected session hidden behind a collapsed group footer is revealed.
-        expandConversationGroup(conversationGroupKey(target))
+        // Ensure a selected session hidden behind a collapsed group footer is revealed,
+        // unless the caller opted out (auto-open after refresh must not expand the group).
+        if (options?.reveal !== false) expandConversationGroup(conversationGroupKey(target))
       }
       if (conversationId === selectedConversationId.value) {
         mobileSidebarOpen.value = false
@@ -3009,6 +3022,27 @@ const App = defineComponent({
       speechController.speak(message.id, message.content, language.value)
     }
 
+    const formatCompactNumber = (value: number): string => {
+      try {
+        return new Intl.NumberFormat(language.value, { notation: 'compact', maximumFractionDigits: 1 }).format(value)
+      } catch {
+        return String(value)
+      }
+    }
+
+    /** Rough local token estimate (~4 characters per token), mirroring the desktop estimate. */
+    const estimateTextTokens = (text: string): number => Math.max(1, Math.round(text.length / 4))
+
+    const messageEstimatedTokenLabel = (message: WebUiMessageSnapshot): string | undefined => {
+      if (!showEstimatedTokens.value || message.role !== 'assistant' || message.status === 'pending') return undefined
+      const tokens = estimateTextTokens(message.content)
+      const tokenLabel = text('estimatedTokens').replace('{{value}}', formatCompactNumber(tokens))
+      const seconds = message.processingTimeMs ? message.processingTimeMs / 1000 : 0
+      if (!(seconds > 0)) return tokenLabel
+      const perSecond = (tokens / seconds).toFixed(1)
+      return `${tokenLabel} · ${text('estimatedTokensPerSecond').replace('{{value}}', perSecond)}`
+    }
+
     const renderMessageActions = (message: WebUiMessageSnapshot) =>
       h('div', { class: 'message-actions' }, [
         message.content
@@ -3166,7 +3200,17 @@ const App = defineComponent({
       }
     }
 
+    const loadWebUiPreferences = async () => {
+      try {
+        const preferences = await httpClient.getJson<WebUiPreferencesResponse>('/api/webui/preferences')
+        showEstimatedTokens.value = preferences.showEstimatedTokens
+      } catch {
+        showEstimatedTokens.value = false
+      }
+    }
+
     const startAuthenticatedSession = () => {
+      void loadWebUiPreferences()
       void refreshHealth()
       void loadConversations()
       void loadAgents().catch(() => {
@@ -3194,10 +3238,11 @@ const App = defineComponent({
         if (!languageOverride.value) language.value = normalizeLanguage(status.language)
         userName.value = status.userName?.trim() ?? ''
         authRequired.value = status.authRequired
-        isAuthenticated.value = !status.authRequired
+        const authenticated = !status.authRequired || status.authenticated === true
+        isAuthenticated.value = authenticated
         bridgeDetail.value = text('checkingBridge')
         serviceStartedAt.value = text('unavailable')
-        if (!status.authRequired) startAuthenticatedSession()
+        if (authenticated) startAuthenticatedSession()
       } catch (error) {
         bridgeState.value = 'offline'
         bridgeDetail.value = localizedErrorMessage(error)
@@ -3216,6 +3261,15 @@ const App = defineComponent({
       sseClient.setAuthKey(key)
       try {
         await refreshHealth()
+        // Best-effort: persist (or clear) the remember-verification cookie via the desktop bridge.
+        try {
+          await httpClient.postJson<{ ok: boolean }>('/api/auth/session', {
+            key,
+            rememberSeconds: rememberVerify.value === 'off' ? 0 : REMEMBER_VERIFY_SECONDS[rememberVerify.value]
+          })
+        } catch {
+          // Remember-verification is optional — the access key itself was already validated above.
+        }
         authError.value = ''
         isAuthenticated.value = true
         startAuthenticatedSession()
@@ -3350,6 +3404,10 @@ const App = defineComponent({
             modelValue: authKeyDraft.value,
             'onUpdate:modelValue': (value: string) => {
               authKeyDraft.value = value
+            },
+            rememberVerify: rememberVerify.value,
+            'onUpdate:rememberVerify': (value: RememberVerifyOption) => {
+              rememberVerify.value = value
             },
             error: authError.value,
             text: text,
@@ -3542,7 +3600,12 @@ const App = defineComponent({
                                       h(
                                         'span',
                                         {
-                                          class: 'conversation-group-icon',
+                                          class: [
+                                            'conversation-group-icon',
+                                            {
+                                              'conversation-group-icon-no-project': group.kind === 'no-project'
+                                            }
+                                          ],
                                           'aria-hidden': 'true'
                                         },
                                         group.kind === 'user' ? '📁' : '○'
@@ -3573,7 +3636,43 @@ const App = defineComponent({
                                 : h(
                                     'div',
                                     { class: 'conversation-group-items' },
-                                    visibleConversations.map((conversation) =>
+                                    visibleConversations.flatMap((conversation, index) => [
+                                      ...(groupHasMore &&
+                                      !collapsed &&
+                                      index === conversationGroupDefaultVisibleCount - 1
+                                        ? [
+                                            h(
+                                              'div',
+                                              { class: 'conversation-group-footer' },
+                                              h(
+                                                'button',
+                                                {
+                                                  class: [
+                                                    'conversation-group-show-more-button',
+                                                    { 'conversation-group-show-more-open': groupCanCollapse }
+                                                  ],
+                                                  type: 'button',
+                                                  'aria-expanded': groupExpanded,
+                                                  onClick: () => toggleConversationGroupExpanded(group.id)
+                                                },
+                                                [
+                                                  h(
+                                                    'span',
+                                                    {
+                                                      class: 'conversation-group-show-more-chevron',
+                                                      'aria-hidden': 'true'
+                                                    },
+                                                    renderActionIcon('down')
+                                                  ),
+                                                  h(
+                                                    'span',
+                                                    groupCanCollapse ? text('collapseGroupMore') : text('showMoreGroup')
+                                                  )
+                                                ]
+                                              )
+                                            )
+                                          ]
+                                        : []),
                                       h(
                                         'div',
                                         {
@@ -3704,37 +3803,8 @@ const App = defineComponent({
                                           ])
                                         ]
                                       )
-                                    )
-                                  ),
-                              groupHasMore && !collapsed
-                                ? h(
-                                    'div',
-                                    { class: 'conversation-group-footer' },
-                                    h(
-                                      'button',
-                                      {
-                                        class: [
-                                          'conversation-group-show-more-button',
-                                          { 'conversation-group-show-more-open': groupCanCollapse }
-                                        ],
-                                        type: 'button',
-                                        'aria-expanded': groupExpanded,
-                                        onClick: () => toggleConversationGroupExpanded(group.id)
-                                      },
-                                      [
-                                        h(
-                                          'span',
-                                          {
-                                            class: 'conversation-group-show-more-chevron',
-                                            'aria-hidden': 'true'
-                                          },
-                                          renderActionIcon('down')
-                                        ),
-                                        h('span', groupCanCollapse ? text('collapseGroupMore') : text('showMoreGroup'))
-                                      ]
-                                    )
+                                    ])
                                   )
-                                : undefined
                             ]
                           )
                         ]
@@ -3893,8 +3963,9 @@ const App = defineComponent({
                         )
                       : undefined,
                     messageLoadMessage.value ? h('p', { class: 'empty-copy' }, messageLoadMessage.value) : undefined,
-                    ...messages.value.map((message) =>
-                      h(
+                    ...messages.value.map((message) => {
+                      const estimatedTokenLabel = messageEstimatedTokenLabel(message)
+                      return h(
                         'article',
                         {
                           class: ['message', message.role === 'user' ? 'user-message' : 'assistant-message'],
@@ -3946,16 +4017,21 @@ const App = defineComponent({
                               ? undefined
                               : h('span', { class: 'streaming-placeholder', 'aria-label': text('generating') }),
                           h('footer', { class: 'message-footer' }, [
-                            h(
-                              'time',
-                              { class: 'message-time', datetime: message.createdAt },
-                              new Date(message.createdAt).toLocaleString()
-                            ),
+                            h('span', { class: 'message-footer-meta' }, [
+                              h(
+                                'time',
+                                { class: 'message-time', datetime: message.createdAt },
+                                new Date(message.createdAt).toLocaleString()
+                              ),
+                              ...(estimatedTokenLabel
+                                ? [h('span', { class: 'message-estimated-tokens' }, estimatedTokenLabel)]
+                                : [])
+                            ]),
                             renderMessageActions(message)
                           ])
                         ]
                       )
-                    )
+                    })
                   ]
                 ),
                 showScrollToBottom.value
@@ -4034,7 +4110,7 @@ const App = defineComponent({
                           composerText.value = (event.target as HTMLTextAreaElement).value
                         },
                         onKeydown: (event: KeyboardEvent) => {
-                          if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
+                          if (event.key === 'Enter' && !event.shiftKey && !event.isComposing && !isCoarsePointer) {
                             event.preventDefault()
                             void submitMessage()
                           }

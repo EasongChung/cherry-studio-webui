@@ -2,70 +2,7 @@ const { Arch } = require('electron-builder')
 const { execSync } = require('child_process')
 const fs = require('fs')
 const path = require('path')
-const { parse } = require('yaml')
-
-// if you want to add new prebuild binaries packages with different architectures, you can add them here
-// please add to allX64 and allArm64 from pnpm-lock.yaml
-const packages = [
-  '@anthropic-ai/claude-agent-sdk-darwin-arm64',
-  '@anthropic-ai/claude-agent-sdk-darwin-x64',
-  '@anthropic-ai/claude-agent-sdk-linux-arm64',
-  '@anthropic-ai/claude-agent-sdk-linux-arm64-musl',
-  '@anthropic-ai/claude-agent-sdk-linux-x64',
-  '@anthropic-ai/claude-agent-sdk-linux-x64-musl',
-  '@anthropic-ai/claude-agent-sdk-win32-arm64',
-  '@anthropic-ai/claude-agent-sdk-win32-x64',
-  '@img/sharp-darwin-arm64',
-  '@img/sharp-darwin-x64',
-  '@img/sharp-libvips-darwin-arm64',
-  '@img/sharp-libvips-darwin-x64',
-  '@img/sharp-libvips-linux-arm64',
-  '@img/sharp-libvips-linuxmusl-arm64',
-  '@img/sharp-libvips-linux-x64',
-  '@img/sharp-libvips-linuxmusl-x64',
-  '@img/sharp-linux-arm64',
-  '@img/sharp-linux-x64',
-  '@img/sharp-linuxmusl-arm64',
-  '@img/sharp-linuxmusl-x64',
-  '@img/sharp-win32-arm64',
-  '@img/sharp-win32-x64',
-  '@napi-rs/system-ocr-darwin-arm64',
-  '@napi-rs/system-ocr-darwin-x64',
-  '@napi-rs/system-ocr-win32-arm64-msvc',
-  '@napi-rs/system-ocr-win32-x64-msvc',
-  '@napi-rs/canvas-linux-x64-gnu',
-  '@napi-rs/canvas-linux-x64-musl',
-  '@napi-rs/canvas-linux-arm64-gnu',
-  '@napi-rs/canvas-linux-arm64-musl',
-  '@napi-rs/canvas-darwin-x64',
-  '@napi-rs/canvas-darwin-arm64',
-  '@napi-rs/canvas-win32-x64-msvc',
-  '@napi-rs/canvas-win32-arm64-msvc',
-  // sqlite-vec prebuilt extensions (vec0.dylib/.so/.dll), from the @aiany/sqlite-vec fork
-  // which adds a windows-arm64 build (upstream ships none). Note the package names use
-  // `windows`, not `win32` — see platformTokens below for why the keep-filter must match both.
-  '@aiany/sqlite-vec-darwin-arm64',
-  '@aiany/sqlite-vec-darwin-x64',
-  '@aiany/sqlite-vec-linux-arm64',
-  '@aiany/sqlite-vec-linux-x64',
-  '@aiany/sqlite-vec-windows-arm64',
-  '@aiany/sqlite-vec-windows-x64'
-]
-
-const platformToArch = {
-  mac: 'darwin',
-  windows: 'win32',
-  linux: 'linux',
-  linuxmusl: 'linuxmusl'
-}
-
-// Most native packages encode Electron's platform key (win32) in their name, but some
-// (e.g. sqlite-vec) use the npm `windows` convention. Match either so a win32 build keeps
-// sqlite-vec-windows-x64 instead of wrongly excluding it.
-const keepPackages = (platform, arch) => {
-  const platformTokens = platform === 'win32' ? ['win32', 'windows'] : [platform]
-  return packages.filter((p) => p.includes(arch) && platformTokens.some((t) => p.includes(t)))
-}
+const { platformToArch, keepPackages, packagesToExclude, binaryPlatformsToExclude } = require('./platform-packages')
 
 // Cross-arch prebuilt packages come from supportedArchitectures in pnpm-workspace.yaml —
 // pnpm ignores that setting once node_modules exists, so it can't be flipped per pack pass.
@@ -98,36 +35,22 @@ exports.default = async function (context) {
   // Fail the build rather than ship a half-empty resources/binaries/<platform>.
   require('./download-binaries').verifyBundledBinaries(platform, arch)
 
+  // Electron-builder consumes `config.files` at copy time (getFileMatchers), so the
+  // supported way to filter files is to append the exclude patterns directly to the
+  // array. The previous `config.files[0].filter = ...` hack silently did nothing —
+  // FileMatcher only exposes a `patterns` field. Patterns must use `**/node_modules/...`
+  // so they also match the nested copies that pnpm's symlink layout materializes
+  // (e.g. claude-agent-sdk/node_modules/@anthropic-ai/claude-agent-sdk-win32-arm64).
   const excludePackages = async (packagesToExclude) => {
-    // 从项目根目录的 electron-builder.yml 读取 files 配置，避免多次覆盖配置导致出错
-    const electronBuilderConfigPath = path.join(__dirname, '..', 'electron-builder.yml')
-    const electronBuilderConfig = parse(fs.readFileSync(electronBuilderConfigPath, 'utf-8'))
-    let filters = electronBuilderConfig.files
-
-    // add filters for other architectures (exclude them)
-    filters.push(...packagesToExclude)
-
-    context.packager.config.files[0].filter = filters
+    context.packager.config.files = [...(context.packager.config.files ?? []), ...packagesToExclude]
   }
 
-  const arm64KeepPackages = keepPackages(platform, 'arm64')
-  const arm64ExcludePackages = packages
-    .filter((p) => !arm64KeepPackages.includes(p))
-    .map((p) => '!node_modules/' + p + '/**')
+  const arm64ExcludePackages = packagesToExclude(platform, 'arm64').map((p) => '!**/node_modules/' + p + '/**')
+  const x64ExcludePackages = packagesToExclude(platform, 'x64').map((p) => '!**/node_modules/' + p + '/**')
 
-  const x64KeepPackages = keepPackages(platform, 'x64')
-  const x64ExcludePackages = packages
-    .filter((p) => !x64KeepPackages.includes(p))
-    .map((p) => '!node_modules/' + p + '/**')
-
-  const currentPlatformKey = `${platform}-${arch}`
-  // win32-arm64 is in this list so `build:win` (--x64 --arm64) can package it. The
-  // @aiany/sqlite-vec fork provides a windows-arm64 vec0.dll, so knowledge-base vector
-  // search works on that target too.
-  const allBinaryPlatforms = ['darwin-arm64', 'darwin-x64', 'linux-x64', 'linux-arm64', 'win32-x64', 'win32-arm64']
-  const excludeBundledBinaryFilters = allBinaryPlatforms
-    .filter((p) => p !== currentPlatformKey)
-    .map((p) => '!resources/binaries/' + p + '/**')
+  const excludeBundledBinaryFilters = binaryPlatformsToExclude(platform, arch).map(
+    (p) => '!resources/binaries/' + p + '/**'
+  )
 
   if (context.arch === Arch.arm64) {
     await excludePackages([...arm64ExcludePackages, ...excludeBundledBinaryFilters])

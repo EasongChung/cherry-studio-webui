@@ -95,6 +95,8 @@ const jsonHeaders = {
 }
 
 const authHeaderName = 'x-cherry-webui-key'
+/** HttpOnly remember-verification cookie name. The value is the URL-encoded access key. */
+const authCookieName = 'cherry_webui_key'
 
 export const isWebUiApiRequest = (requestUrl?: string) => {
   if (!requestUrl) return false
@@ -113,7 +115,7 @@ const writeResult = (response: ServerResponse, result: WebUiApiRouteResult) => {
     response.end(result.rawBody)
     return
   }
-  response.writeHead(result.status, jsonHeaders)
+  response.writeHead(result.status, { ...jsonHeaders, ...result.headers })
   response.end(JSON.stringify(result.body ?? null))
 }
 
@@ -127,6 +129,26 @@ const methodNotAllowed = (allowed: readonly string[]): WebUiApiRouteResult => ({
 
 const normalizeAuthKey = (key: string) => key.trim()
 
+const readCookieValue = (request: IncomingMessage, name: string): string | undefined => {
+  const header = request.headers.cookie
+  if (!header) return undefined
+  for (const part of header.split(';')) {
+    const separator = part.indexOf('=')
+    if (separator <= 0) continue
+    if (part.slice(0, separator).trim() === name) return part.slice(separator + 1).trim()
+  }
+  return undefined
+}
+
+const decodeRememberedKey = (raw: string | undefined): string => {
+  if (!raw) return ''
+  try {
+    return decodeURIComponent(raw)
+  } catch {
+    return ''
+  }
+}
+
 export const isWebUiRequestAuthorized = (request: IncomingMessage, url: URL, authKey: string) => {
   const expectedKey = normalizeAuthKey(authKey)
   // Access key is mandatory — empty key rejects all requests.
@@ -138,7 +160,7 @@ export const isWebUiRequestAuthorized = (request: IncomingMessage, url: URL, aut
       ? headerValue
       : Array.isArray(headerValue)
         ? headerValue[0]
-        : url.searchParams.get('key')
+        : (url.searchParams.get('key') ?? decodeRememberedKey(readCookieValue(request, authCookieName)))
 
   return normalizeAuthKey(providedKey ?? '') === expectedKey
 }
@@ -158,6 +180,7 @@ const MAX_WEBUI_ATTACHMENT_BYTES = 10 * 1024 * 1024
 const MAX_WEBUI_ATTACHMENTS_BYTES = 25 * 1024 * 1024
 const MAX_WEBUI_REQUEST_BYTES = 40 * 1024 * 1024
 const webUiModelsPath = '/api/webui/models'
+const webUiPreferencesPath = '/api/webui/preferences'
 const sessionMessagePath = /^\/api\/agent-sessions\/([^/]+)\/messages$/
 const sessionAbortPath = /^\/api\/agent-sessions\/([^/]+)\/abort$/
 const sessionContextUsagePath = /^\/api\/agent-sessions\/([^/]+)\/context-usage$/
@@ -554,10 +577,64 @@ export const createWebUiApiRouter = ({
         status: 200,
         body: {
           authRequired: Boolean(normalizeAuthKey(getAuthKey())),
+          authenticated: isWebUiRequestAuthorized(request, url, getAuthKey()),
           language: getLanguage(),
           // WebUI desktop bridge
           userName: application.get('PreferenceService').get('app.user.name'),
           timestamp: new Date().toISOString()
+        }
+      }
+    }
+
+    if (pathname === '/api/auth/session') {
+      if (method !== 'POST') return methodNotAllowed(['POST'])
+
+      const expectedKey = normalizeAuthKey(getAuthKey())
+      if (!expectedKey) {
+        return {
+          status: 403,
+          body: {
+            code: 'WEBUI_AUTH_DISABLED',
+            message: 'Configure a WebUI access key before using remember-verification'
+          }
+        }
+      }
+
+      const body = (await readJsonBody(request).catch(() => undefined)) as
+        | { readonly key?: unknown; readonly rememberSeconds?: unknown }
+        | undefined
+      const candidateKey = typeof body?.key === 'string' ? body.key : ''
+      if (normalizeAuthKey(candidateKey) !== expectedKey) return unauthorized()
+
+      const rememberSeconds = typeof body?.rememberSeconds === 'number' ? body.rememberSeconds : 0
+
+      // rememberSeconds === 0 clears any previously issued remember cookie.
+      if (rememberSeconds === 0) {
+        return {
+          status: 200,
+          body: { ok: true },
+          headers: {
+            'Set-Cookie': `${authCookieName}=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0`
+          }
+        }
+      }
+
+      const supportedDurations = [3 * 60 * 60, 24 * 60 * 60, 7 * 24 * 60 * 60]
+      if (!supportedDurations.includes(rememberSeconds)) {
+        return {
+          status: 400,
+          body: {
+            code: 'WEBUI_INVALID_REMEMBER_SECONDS',
+            message: 'rememberSeconds must be one of the supported durations'
+          }
+        }
+      }
+
+      return {
+        status: 200,
+        body: { ok: true },
+        headers: {
+          'Set-Cookie': `${authCookieName}=${encodeURIComponent(expectedKey)}; HttpOnly; SameSite=Lax; Max-Age=${rememberSeconds}; Path=/`
         }
       }
     }
@@ -692,6 +769,17 @@ export const createWebUiApiRouter = ({
       if (method !== 'GET') return methodNotAllowed(['GET'])
 
       return { status: 200, body: { groups: listWebUiChatModelGroups() } }
+    }
+
+    if (pathname === webUiPreferencesPath) {
+      if (method !== 'GET') return methodNotAllowed(['GET'])
+
+      return {
+        status: 200,
+        body: {
+          showEstimatedTokens: Boolean(application.get('PreferenceService').get('chat.input.show_estimated_tokens'))
+        }
+      }
     }
 
     if (contextUsageMatch) {
