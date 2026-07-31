@@ -1,5 +1,6 @@
 name: Build Cherry Studio WebUI Windows
 
+# Fork-only: builds are manual (workflow_dispatch) — never on push.
 on:
   workflow_dispatch:
     inputs:
@@ -7,21 +8,6 @@ on:
         description: "Release tag. Empty uses webui run number."
         required: false
         default: ""
-  push:
-    branches:
-      - webui
-    paths:
-      - webui/**
-      - src/main/**
-      - src/renderer/pages/settings/ChannelsSettings/**
-      - src/renderer/i18n/**
-      - src/shared/data/preference/**
-      - src/shared/data/cache/**
-      - electron-builder.yml
-      - package.json
-      - pnpm-lock.yaml
-      - .node-version
-      - .github/workflows/webui-windows-build.yml
 
 permissions:
   contents: write
