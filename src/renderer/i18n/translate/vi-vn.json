@@ -146,6 +146,10 @@
         "whoamiTip": "Mẹo: Gửi /whoami trong WeChat để lấy ID của người dùng."
       }
     },
+    "composer": {
+      "background_running_one": "[to be translated]:{{count}} background task running",
+      "background_running_other": "[to be translated]:{{count}} background tasks running"
+    },
     "delete": {
       "content": "Xóa tác nhân sẽ buộc dừng và xóa tất cả các phiên liên kết với tác nhân này. Bạn có chắc chắn không?",
       "error": {
@@ -321,16 +325,25 @@
         "more": "+{{count}} nữa",
         "no_artifacts": "Không có sản phẩm giao nộo nào được khai báo",
         "no_subagents": "Không có đại lý phụ",
-        "subagents": "Đại lý phụ"
+        "shell_tasks": "[to be translated]:Background commands",
+        "subagents": "Đại lý phụ",
+        "workflows": "[to be translated]:Workflows"
       },
       "status": {
         "activity": "Hoạt động",
         "agent": "Đại lý",
         "context": "Bối cảnh",
         "no_tasks": "Không có tác vụ nào đang hoạt động",
+        "run_task_live_one": "[to be translated]:{{count}} live",
+        "run_task_live_other": "[to be translated]:{{count}} live",
+        "run_tasks": "[to be translated]:Subtasks",
         "selected_tool": "Công cụ đã chọn",
+        "stop_run_task": "[to be translated]:Stop task",
+        "stop_run_task_failed": "[to be translated]:Failed to stop task",
         "task_count": "{{completed}} / {{total}} hoàn thành",
         "tasks": "Nhiệm vụ",
+        "tool_uses_one": "[to be translated]:{{count}} tool call",
+        "tool_uses_other": "[to be translated]:{{count}} tool calls",
         "tools_active": "Hoạt động",
         "tools_done": "Xong",
         "tools_failed": "Thất bại",
@@ -620,7 +633,8 @@
           },
           "auto": {
             "description": "Chạy mà không cần hỏi thường lệ. Kiểm tra an toàn sẽ chặn các hành động rủi ro.",
-            "title": "Phê duyệt thay tôi"
+            "title": "Phê duyệt thay tôi",
+            "warning": "Cần một mô hình hỗ trợ; các mô hình khác có thể bỏ qua hoặc vẫn tiếp tục hỏi."
           },
           "bypassPermissions": {
             "description": "Bỏ qua kiểm tra quyền. Có thể xóa tệp và sử dụng mạng.",
@@ -1254,10 +1268,6 @@
           "tip": "Trợ lý sẽ sử dụng khả năng nhận diện ý định của mô hình lớn để xác định xem có nên sử dụng cơ sở tri thức để trả lời hay không. Tính năng này sẽ phụ thuộc vào khả năng của mô hình"
         }
       },
-      "max_tool_calls": {
-        "label": "Số lần gọi công cụ tối đa",
-        "tip": "Số lượng tối đa các lệnh gọi công cụ được phép trong một cuộc trò chuyện. Giá trị cao hơn cho phép thực hiện các thao tác nhiều bước phức tạp hơn nhưng có thể làm tăng lượng token sử dụng và thời gian phản hồi."
-      },
       "mcp": {
         "description": "Servidores MCP habilitados por defecto",
         "enableFirst": "Bật máy chủ này trong cài đặt MCP trước",
@@ -1463,9 +1473,8 @@
       "image_preview_failed": "Xem trước hình ảnh thất bại",
       "knowledge_base": "Cơ sở tri thức",
       "knowledge_base_disabled_by_files": "Gỡ các tệp đính kèm để sử dụng Cơ sở tri thức",
-      "knowledge_base_unavailable": "Chọn một mô hình có khả năng sử dụng công cụ hoặc bật tính năng sử dụng công cụ trong lời nhắc",
+      "knowledge_base_unavailable": "Chọn một mô hình có khả năng sử dụng công cụ",
       "locate_editing_message": "Định vị thông điệp gốc",
-      "mcp_unavailable": "Chọn một mô hình có khả năng sử dụng công cụ hoặc bật tính năng sử dụng công cụ trong lời nhắc",
       "new": {
         "context": "Clear Context"
       },
@@ -1606,13 +1615,8 @@
       }
     },
     "mcp": {
-      "error": {
-        "parse_tool_call": "Không thể chuyển đổi sang định dạng cuộc gọi công cụ hợp lệ: {{toolCall}}"
-      },
       "warning": {
         "gemini_web_search": "Gemini không hỗ trợ sử dụng đồng thời các công cụ tìm kiếm web gốc và gọi hàm",
-        "multiple_tools": "Tồn tại nhiều công cụ MCP khớp, {{tool}} đã được chọn",
-        "no_tool": "Không tìm thấy công cụ MCP phù hợp cho {{tool}}",
         "url_context": "Gemini không hỗ trợ sử dụng ngữ cảnh url và gọi hàm đồng thời"
       }
     },
@@ -3844,6 +3848,7 @@
     },
     "citation": "{{count}} trích dẫn",
     "citations": "Tài liệu tham khảo",
+    "conversation_reset": "[to be translated]:Previous conversation history could not be found — continuing in a new conversation",
     "copied": "Đã sao chép!",
     "copy": {
       "failed": "Sao chép thất bại",
@@ -4125,6 +4130,7 @@
         "write": "Lưu",
         "writing": "Tiết kiệm"
       },
+      "agent_background": "[to be translated]:Running in background",
       "approvalRequired": "Werkzeug \"{{tool}}\" erfordert eine Genehmigung",
       "autoApproveEnabled": "Tự động phê duyệt đã được bật cho công cụ này",
       "cancelled": "Đã hủy",
@@ -4156,6 +4162,7 @@
         "tool": "Công cụ",
         "webFetch": "Truy xuất Web",
         "webSearch": "Tìm kiếm trên web",
+        "workflow": "[to be translated]:Workflow",
         "write": "Viết"
       },
       "noData": "Không có dữ liệu nào cho công cụ này",
@@ -4213,6 +4220,15 @@
         "plan_other": "{{count}} gói",
         "result_one": "{{count}} kết quả",
         "result_other": "{{count}} kết quả"
+      },
+      "workflow": {
+        "orchestrating": "[to be translated]:Orchestrating workflow",
+        "run_id": "[to be translated]:Run ID",
+        "script": "[to be translated]:Workflow script",
+        "script_path": "[to be translated]:Script path",
+        "started": "[to be translated]:Started workflow",
+        "summary": "[to be translated]:Summary",
+        "workflow": "[to be translated]:workflow"
       }
     },
     "topic": {
@@ -7726,6 +7742,13 @@
           "toggle_client_email_visibility": "Chuyển đổi hiển thị email của khách hàng",
           "toggle_private_key_visibility": "Chuyển đổi hiển thị khóa riêng tư",
           "toggle_project_id_visibility": "Chuyển đổi hiển thị ID dự án"
+        }
+      },
+      "radeon_cloud": {
+        "benefits": {
+          "cta": "Mở Token Factory",
+          "description": "Quy đổi từ 10 USD tín dụng API mỗi ngày: khoảng 10M–111M token đầu vào/đầu ra theo mức giá hiện tại, tùy vào mô hình và loại token. Tín dụng được đặt lại hằng ngày; hiện chưa hỗ trợ nạp thêm.",
+          "title": "10 USD tín dụng API miễn phí mỗi ngày"
         }
       }
     },

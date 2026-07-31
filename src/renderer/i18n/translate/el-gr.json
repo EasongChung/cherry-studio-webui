@@ -146,6 +146,10 @@
         "whoamiTip": "Συμβουλή: Στείλτε /whoami στο WeChat για να λάβετε το αναγνωριστικό ενός χρήστη."
       }
     },
+    "composer": {
+      "background_running_one": "[to be translated]:{{count}} background task running",
+      "background_running_other": "[to be translated]:{{count}} background tasks running"
+    },
     "delete": {
       "content": "Η διαγραφή αυτού του Agent θα τερματίσει βίαια και θα διαγράψει όλες τις συνεδρίες υπό αυτόν τον Agent. Είστε σίγουροι;",
       "error": {
@@ -321,16 +325,25 @@
         "more": "+{{count}} ακόμα",
         "no_artifacts": "Καμία δηλωμένη παράδοση",
         "no_subagents": "Καμία υπο-αντιπροσωπεία",
-        "subagents": "Υπο-πράκτορες"
+        "shell_tasks": "[to be translated]:Background commands",
+        "subagents": "Υπο-πράκτορες",
+        "workflows": "[to be translated]:Workflows"
       },
       "status": {
         "activity": "Δραστηριότητα",
         "agent": "Πράκτορας",
         "context": "Συμφραζόμενα",
         "no_tasks": "Κανένα ενεργό καθήκον",
+        "run_task_live_one": "[to be translated]:{{count}} live",
+        "run_task_live_other": "[to be translated]:{{count}} live",
+        "run_tasks": "[to be translated]:Subtasks",
         "selected_tool": "Επιλεγμένο εργαλείο",
+        "stop_run_task": "[to be translated]:Stop task",
+        "stop_run_task_failed": "[to be translated]:Failed to stop task",
         "task_count": "{{completed}} / {{total}} ολοκληρώθηκαν",
         "tasks": "Εργασίες",
+        "tool_uses_one": "[to be translated]:{{count}} tool call",
+        "tool_uses_other": "[to be translated]:{{count}} tool calls",
         "tools_active": "Ενεργός",
         "tools_done": "Έγινε",
         "tools_failed": "Απέτυχε",
@@ -620,7 +633,8 @@
           },
           "auto": {
             "description": "Εκτελείται χωρίς συνήθεις ερωτήσεις. Ένας έλεγχος ασφαλείας μπλοκάρει επικίνδυνες ενέργειες.",
-            "title": "Έγκριση για μένα"
+            "title": "Έγκριση για μένα",
+            "warning": "Απαιτεί μοντέλο που το υποστηρίζει· άλλα μοντέλα ενδέχεται να το αγνοήσουν ή να συνεχίσουν να ρωτούν."
           },
           "bypassPermissions": {
             "description": "Παρακάμπτει τους ελέγχους δικαιωμάτων. Μπορεί να διαγράψει αρχεία και να χρησιμοποιήσει το δίκτυο.",
@@ -1254,10 +1268,6 @@
           "tip": "Ο πράκτορας θα καλέσει τη δυνατότητα αναγνώρισης πρόθεσης του μεγάλου μοντέλου για να αποφασίσει αν χρειάζεται να κληθεί η βάση γνώσης για να απαντηθεί, και αυτή η λειτουργία θα εξαρτηθεί από τις δυνατότητες του μοντέλου"
         }
       },
-      "max_tool_calls": {
-        "label": "Μέγιστος Αριθμός Κλήσεων Εργαλείων",
-        "tip": "Μέγιστος αριθμός κλήσεων εργαλείων που επιτρέπονται σε μία συνομιλία. Υψηλότερες τιμές επιτρέπουν πιο σύνθετες πολυσταδιακές λειτουργίες, αλλά ενδέχεται να αυξήσουν τη χρήση token και τον χρόνο απόκρισης."
-      },
       "mcp": {
         "description": "Διακομιστής MCP που είναι ενεργοποιημένος εξ ορισμού",
         "enableFirst": "Πρώτα ενεργοποιήστε αυτόν τον διακομιστή στις ρυθμίσεις MCP",
@@ -1463,9 +1473,8 @@
       "image_preview_failed": "Η προεπισκόπηση της εικόνας απέτυχε",
       "knowledge_base": "Βάση γνώσεων",
       "knowledge_base_disabled_by_files": "Αφαιρέστε τα συνημμένα αρχεία για να χρησιμοποιήσετε τη Βάση Γνώσεων",
-      "knowledge_base_unavailable": "Επιλέξτε ένα μοντέλο με δυνατότητα χρήσης εργαλείων ή ενεργοποιήστε τη χρήση εργαλείων στο prompt",
+      "knowledge_base_unavailable": "Επιλέξτε ένα μοντέλο με δυνατότητα χρήσης εργαλείων",
       "locate_editing_message": "Εντοπίστε το αρχικό μήνυμα",
-      "mcp_unavailable": "Επιλέξτε ένα μοντέλο με δυνατότητα χρήσης εργαλείων ή ενεργοποιήστε τη χρήση εργαλείων μέσω προτροπής",
       "new": {
         "context": "Καθαρισμός ενδιάμεσων {{Command}}"
       },
@@ -1606,13 +1615,8 @@
       }
     },
     "mcp": {
-      "error": {
-        "parse_tool_call": "Δεν είναι δυνατή η μετατροπή σε έγκυρη μορφή κλήσης εργαλείου: {{toolCall}}"
-      },
       "warning": {
         "gemini_web_search": "Το Gemini δεν υποστηρίζει την ταυτόχρονη χρήση του εργαλείου αυτόματης αναζήτησης και της κλήσης συναρτήσεων",
-        "multiple_tools": "Υπάρχουν πολλαπλά εργαλεία MCP που ταιριάζουν, επιλέχθηκε το {{tool}}",
-        "no_tool": "Δεν βρέθηκε το απαιτούμενο εργαλείο MCP {{tool}}",
         "url_context": "Το Gemini δεν υποστηρίζει την ταυτόχρονη χρήση πλοήγησης στον ιστό και κλήσης συναρτήσεων"
       }
     },
@@ -3844,6 +3848,7 @@
     },
     "citation": "{{count}} αναφορές",
     "citations": "Περιεχόμενα αναφοράς",
+    "conversation_reset": "[to be translated]:Previous conversation history could not be found — continuing in a new conversation",
     "copied": "Αντιγράφηκε",
     "copy": {
       "failed": "Η αντιγραφή απέτυχε",
@@ -4125,6 +4130,7 @@
         "write": "Αποθήκευση",
         "writing": "Αποθήκευση"
       },
+      "agent_background": "[to be translated]:Running in background",
       "approvalRequired": "Το εργαλείο \"{{tool}}\" απαιτεί έγκριση",
       "autoApproveEnabled": "Αυτό το εργαλείο έχει ενεργοποιημένη την αυτόματη έγκριση",
       "cancelled": "Ακυρώθηκε",
@@ -4156,6 +4162,7 @@
         "tool": "Εργαλείο",
         "webFetch": "Ανάκτηση Ιστού",
         "webSearch": "Αναζήτηση στον Ιστό",
+        "workflow": "[to be translated]:Workflow",
         "write": "Γράψε"
       },
       "noData": "Δεν υπάρχουν διαθέσιμα δεδομένα για αυτό το εργαλείο",
@@ -4213,6 +4220,15 @@
         "plan_other": "{{count}} σχέδια",
         "result_one": "{{count}} αποτέλεσμα",
         "result_other": "{{count}} αποτελέσματα"
+      },
+      "workflow": {
+        "orchestrating": "[to be translated]:Orchestrating workflow",
+        "run_id": "[to be translated]:Run ID",
+        "script": "[to be translated]:Workflow script",
+        "script_path": "[to be translated]:Script path",
+        "started": "[to be translated]:Started workflow",
+        "summary": "[to be translated]:Summary",
+        "workflow": "[to be translated]:workflow"
       }
     },
     "topic": {
@@ -7726,6 +7742,13 @@
           "toggle_client_email_visibility": "Εναλλαγή ορατότητας email του πελάτη",
           "toggle_private_key_visibility": "Εναλλαγή ορατότητας ιδιωτικού κλειδιού",
           "toggle_project_id_visibility": "Εναλλαγή ορατότητας αναγνωριστικού έργου"
+        }
+      },
+      "radeon_cloud": {
+        "benefits": {
+          "cta": "Άνοιγμα Token Factory",
+          "description": "Ισοδυναμεί με πίστωση API 10 USD ημερησίως: περίπου 10M–111M tokens εισόδου/εξόδου με τις τρέχουσες τιμές, ανάλογα με το μοντέλο και τον τύπο token. Η πίστωση επαναφέρεται καθημερινά· προς το παρόν δεν υποστηρίζονται ανανεώσεις υπολοίπου.",
+          "title": "Δωρεάν ημερήσια πίστωση API αξίας 10 USD"
         }
       }
     },
