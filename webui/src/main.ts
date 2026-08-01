@@ -35,6 +35,7 @@ import type {
   WebUiCursorResponse,
   WebUiHealthResponse,
   WebUiMessageSnapshot,
+  WebUiMessageTokenStats,
   WebUiModel,
   WebUiModelGroup,
   WebUiModelsResponse,
@@ -226,6 +227,7 @@ const App = defineComponent({
     const workspaceFileSearch = ref('')
     const workspacePathDraft = ref('')
     const copiedHint = ref<string>()
+    const reloadHint = ref<string>()
     const workspaceSearchEntries = ref<readonly WebUiWorkspaceFileEntry[]>([])
     const workspaceFilesLoading = ref(false)
     const workspaceFilesError = ref('')
@@ -488,6 +490,25 @@ const App = defineComponent({
           'aria-live': 'polite'
         },
         label
+      )
+    }
+    const showReloadHint = () => {
+      const stamp = `reload::${Date.now()}`
+      reloadHint.value = stamp
+      window.setTimeout(() => {
+        if (reloadHint.value === stamp) reloadHint.value = undefined
+      }, 1600)
+    }
+    const renderReloadToast = () => {
+      if (!reloadHint.value) return undefined
+      return h(
+        'div',
+        {
+          class: 'webui-copy-toast',
+          role: 'status',
+          'aria-live': 'polite'
+        },
+        text('conversationRefreshed')
       )
     }
     const markdownToPlainText = (value: string) => {
@@ -2854,6 +2875,7 @@ const App = defineComponent({
     }
 
     // Reload the current conversation when the user wheels down 3 times while near the bottom.
+    // The 1200ms window tolerates fast trackpad momentum / notched wheel pulses between events.
     let bottomReloadWheelCount = 0
     let bottomReloadWheelLastAt = 0
     const handleMessageStackWheel = (event: WheelEvent) => {
@@ -2866,13 +2888,16 @@ const App = defineComponent({
         return
       }
       const now = performance.now()
-      if (now - bottomReloadWheelLastAt > 400) bottomReloadWheelCount = 0
+      if (now - bottomReloadWheelLastAt > 1200) bottomReloadWheelCount = 0
       bottomReloadWheelLastAt = now
       bottomReloadWheelCount += 1
       if (bottomReloadWheelCount >= 3) {
         bottomReloadWheelCount = 0
         const conversationId = selectedConversationId.value
-        if (conversationId) void loadConversationMessages(conversationId, 'refresh')
+        if (conversationId) {
+          showReloadHint()
+          void loadConversationMessages(conversationId, 'refresh')
+        }
       }
     }
 
@@ -3053,17 +3078,47 @@ const App = defineComponent({
       }
     }
 
-    /** Rough local token estimate (~4 characters per token), mirroring the desktop estimate. */
+    /** Rough local token estimate (~4 characters per token), used only when the desktop reports no stats. */
     const estimateTextTokens = (text: string): number => Math.max(1, Math.round(text.length / 4))
 
+    /**
+     * Mirrors the desktop `getMessageModelTokensPerSecond`: prefers measured
+     * runtime timing, falls back to legacy scalar timestamps.
+     */
+    const getMessageModelTokensPerSecond = (stats: WebUiMessageTokenStats): number | undefined => {
+      if (stats.runtimeTiming) {
+        const outputTokens = stats.measuredOutputTokens
+        const durationMs = stats.generationDurationMs
+        return outputTokens !== undefined && durationMs !== undefined && durationMs > 0
+          ? outputTokens / (durationMs / 1000)
+          : undefined
+      }
+      const completion = stats.timeCompletionMs
+      if (completion === undefined || completion <= 0) return undefined
+      const firstToken = Math.min(stats.timeFirstTokenMs ?? 0, completion)
+      const generationDuration = completion - firstToken
+      const outputTokens = stats.outputTokens
+      return outputTokens !== undefined && outputTokens > 0 && generationDuration > 0
+        ? outputTokens / (generationDuration / 1000)
+        : undefined
+    }
+
     const messageEstimatedTokenLabel = (message: WebUiMessageSnapshot): string | undefined => {
-      if (!showEstimatedTokens.value || message.role !== 'assistant' || message.status === 'pending') return undefined
-      const tokens = estimateTextTokens(message.content)
+      if (!showEstimatedTokens.value || message.status === 'pending') return undefined
+      // User turns surface real token usage when the desktop reported stats for them.
+      if (message.role !== 'assistant') {
+        if (!message.tokenStats) return undefined
+        return text('estimatedTokens').replace('{{value}}', formatCompactNumber(message.tokenStats.totalTokens))
+      }
+      const tokens = message.tokenStats?.totalTokens ?? estimateTextTokens(message.content)
       const tokenLabel = text('estimatedTokens').replace('{{value}}', formatCompactNumber(tokens))
-      const seconds = message.processingTimeMs ? message.processingTimeMs / 1000 : 0
-      if (!(seconds > 0)) return tokenLabel
-      const perSecond = (tokens / seconds).toFixed(1)
-      return `${tokenLabel} · ${text('estimatedTokensPerSecond').replace('{{value}}', perSecond)}`
+      const tokensPerSecond = message.tokenStats
+        ? getMessageModelTokensPerSecond(message.tokenStats)
+        : message.processingTimeMs
+          ? tokens / (message.processingTimeMs / 1000)
+          : undefined
+      if (!(tokensPerSecond !== undefined && tokensPerSecond > 0)) return tokenLabel
+      return `${tokenLabel} · ${text('estimatedTokensPerSecond').replace('{{value}}', tokensPerSecond.toFixed(1))}`
     }
 
     const renderMessageActions = (message: WebUiMessageSnapshot) =>
@@ -3570,14 +3625,133 @@ const App = defineComponent({
                           group.kind === 'user' ? text('createInWorkspace') : text('createInNoProject')
                         const groupExpanded = expandedConversationGroupIds.value.has(group.id)
                         const totalCount = group.conversations.length
-                        const visibleConversations = groupExpanded
-                          ? group.conversations
-                          : group.conversations.slice(0, conversationGroupDefaultVisibleCount)
                         // Mirrors the desktop per-group "show more / collapse" footer button:
                         // no button while the group fits the default count, and expanded
                         // groups with more than the default can collapse back to it.
                         const groupHasMore = totalCount > conversationGroupDefaultVisibleCount
                         const groupCanCollapse = groupExpanded && groupHasMore
+                        const renderConversationItem = (conversation: WebUiConversationSummary) =>
+                          h(
+                            'div',
+                            {
+                              key: conversation.id,
+                              class: [
+                                'conversation-item-wrap',
+                                {
+                                  'conversation-item-wrap-selected': conversation.id === selectedConversationId.value
+                                }
+                              ]
+                            },
+                            [
+                              editingConversationId.value === conversation.id
+                                ? h('div', { class: ['conversation-item', 'conversation-item-editing'] }, [
+                                    h('input', {
+                                      class: 'conversation-title-input',
+                                      value: editingConversationTitle.value,
+                                      autofocus: true,
+                                      onInput: (event: Event) => {
+                                        editingConversationTitle.value = (event.target as HTMLInputElement).value
+                                      },
+                                      onKeydown: (event: KeyboardEvent) => {
+                                        if (event.key === 'Enter') {
+                                          event.preventDefault()
+                                          void saveConversationTitle()
+                                        }
+                                        if (event.key === 'Escape') {
+                                          event.preventDefault()
+                                          closeEditConversation()
+                                        }
+                                      }
+                                    }),
+                                    h('span', { class: 'conversation-meta' }, [
+                                      `${conversationAgentName(conversation.agentId)} · `,
+                                      new Date(conversation.updatedAt).toLocaleString()
+                                    ])
+                                  ])
+                                : h(
+                                    'button',
+                                    {
+                                      type: 'button',
+                                      class: [
+                                        'conversation-item',
+                                        {
+                                          'conversation-item-selected': conversation.id === selectedConversationId.value
+                                        }
+                                      ],
+                                      'aria-current':
+                                        conversation.id === selectedConversationId.value ? 'page' : undefined,
+                                      onClick: () => selectConversation(conversation.id)
+                                    },
+                                    [
+                                      h('span', { class: 'conversation-title' }, conversation.title),
+                                      h('span', { class: 'conversation-meta' }, [
+                                        `${conversationAgentName(conversation.agentId)} · `,
+                                        new Date(conversation.updatedAt).toLocaleString()
+                                      ])
+                                    ]
+                                  ),
+                              h('div', { class: 'conversation-actions' }, [
+                                h(
+                                  'button',
+                                  {
+                                    class: 'conversation-action-button',
+                                    type: 'button',
+                                    title: text('editTitle'),
+                                    'aria-label': text('editTitle'),
+                                    'aria-expanded': openConversationMenuId.value === conversation.id,
+                                    disabled: conversationActionState.value === 'deleting',
+                                    onClick: () => toggleConversationMenu(conversation.id)
+                                  },
+                                  conversationActionState.value === 'generating' &&
+                                    conversationActionId.value === conversation.id
+                                    ? h('span', {
+                                        class: 'mini-spinner',
+                                        'aria-hidden': 'true'
+                                      })
+                                    : renderActionIcon('more')
+                                ),
+                                openConversationMenuId.value === conversation.id
+                                  ? h('div', { class: 'conversation-action-menu', role: 'menu' }, [
+                                      h(
+                                        'button',
+                                        {
+                                          class: 'conversation-action-menu-item',
+                                          type: 'button',
+                                          role: 'menuitem',
+                                          disabled: conversationActionState.value === 'deleting',
+                                          onClick: () => openEditConversation(conversation)
+                                        },
+                                        [renderActionIcon('edit'), h('span', text('editTitle'))]
+                                      ),
+                                      h(
+                                        'button',
+                                        {
+                                          class: 'conversation-action-menu-item',
+                                          type: 'button',
+                                          role: 'menuitem',
+                                          disabled:
+                                            conversationActionState.value === 'generating' &&
+                                            conversationActionId.value === conversation.id,
+                                          onClick: () => void generateConversationTitle(conversation.id)
+                                        },
+                                        [renderActionIcon('sparkles'), h('span', text('generateTopicName'))]
+                                      ),
+                                      h(
+                                        'button',
+                                        {
+                                          class: ['conversation-action-menu-item', 'conversation-action-menu-danger'],
+                                          type: 'button',
+                                          role: 'menuitem',
+                                          disabled: activeRunConversationId.value === conversation.id,
+                                          onClick: () => openDeleteConversation(conversation.id)
+                                        },
+                                        [renderActionIcon('trash'), h('span', text('deleteConversation'))]
+                                      )
+                                    ])
+                                  : undefined
+                              ])
+                            ]
+                          )
                         return [
                           h(
                             'div',
@@ -3657,138 +3831,9 @@ const App = defineComponent({
                               collapsed
                                 ? undefined
                                 : h('div', { class: 'conversation-group-items' }, [
-                                    ...visibleConversations.map((conversation) =>
-                                      h(
-                                        'div',
-                                        {
-                                          key: conversation.id,
-                                          class: [
-                                            'conversation-item-wrap',
-                                            {
-                                              'conversation-item-wrap-selected':
-                                                conversation.id === selectedConversationId.value
-                                            }
-                                          ]
-                                        },
-                                        [
-                                          editingConversationId.value === conversation.id
-                                            ? h('div', { class: ['conversation-item', 'conversation-item-editing'] }, [
-                                                h('input', {
-                                                  class: 'conversation-title-input',
-                                                  value: editingConversationTitle.value,
-                                                  autofocus: true,
-                                                  onInput: (event: Event) => {
-                                                    editingConversationTitle.value = (
-                                                      event.target as HTMLInputElement
-                                                    ).value
-                                                  },
-                                                  onKeydown: (event: KeyboardEvent) => {
-                                                    if (event.key === 'Enter') {
-                                                      event.preventDefault()
-                                                      void saveConversationTitle()
-                                                    }
-                                                    if (event.key === 'Escape') {
-                                                      event.preventDefault()
-                                                      closeEditConversation()
-                                                    }
-                                                  }
-                                                }),
-                                                h('span', { class: 'conversation-meta' }, [
-                                                  `${conversationAgentName(conversation.agentId)} · `,
-                                                  new Date(conversation.updatedAt).toLocaleString()
-                                                ])
-                                              ])
-                                            : h(
-                                                'button',
-                                                {
-                                                  type: 'button',
-                                                  class: [
-                                                    'conversation-item',
-                                                    {
-                                                      'conversation-item-selected':
-                                                        conversation.id === selectedConversationId.value
-                                                    }
-                                                  ],
-                                                  'aria-current':
-                                                    conversation.id === selectedConversationId.value
-                                                      ? 'page'
-                                                      : undefined,
-                                                  onClick: () => selectConversation(conversation.id)
-                                                },
-                                                [
-                                                  h('span', { class: 'conversation-title' }, conversation.title),
-                                                  h('span', { class: 'conversation-meta' }, [
-                                                    `${conversationAgentName(conversation.agentId)} · `,
-                                                    new Date(conversation.updatedAt).toLocaleString()
-                                                  ])
-                                                ]
-                                              ),
-                                          h('div', { class: 'conversation-actions' }, [
-                                            h(
-                                              'button',
-                                              {
-                                                class: 'conversation-action-button',
-                                                type: 'button',
-                                                title: text('editTitle'),
-                                                'aria-label': text('editTitle'),
-                                                'aria-expanded': openConversationMenuId.value === conversation.id,
-                                                disabled: conversationActionState.value === 'deleting',
-                                                onClick: () => toggleConversationMenu(conversation.id)
-                                              },
-                                              conversationActionState.value === 'generating' &&
-                                                conversationActionId.value === conversation.id
-                                                ? h('span', {
-                                                    class: 'mini-spinner',
-                                                    'aria-hidden': 'true'
-                                                  })
-                                                : renderActionIcon('more')
-                                            ),
-                                            openConversationMenuId.value === conversation.id
-                                              ? h('div', { class: 'conversation-action-menu', role: 'menu' }, [
-                                                  h(
-                                                    'button',
-                                                    {
-                                                      class: 'conversation-action-menu-item',
-                                                      type: 'button',
-                                                      role: 'menuitem',
-                                                      disabled: conversationActionState.value === 'deleting',
-                                                      onClick: () => openEditConversation(conversation)
-                                                    },
-                                                    [renderActionIcon('edit'), h('span', text('editTitle'))]
-                                                  ),
-                                                  h(
-                                                    'button',
-                                                    {
-                                                      class: 'conversation-action-menu-item',
-                                                      type: 'button',
-                                                      role: 'menuitem',
-                                                      disabled:
-                                                        conversationActionState.value === 'generating' &&
-                                                        conversationActionId.value === conversation.id,
-                                                      onClick: () => void generateConversationTitle(conversation.id)
-                                                    },
-                                                    [renderActionIcon('sparkles'), h('span', text('generateTopicName'))]
-                                                  ),
-                                                  h(
-                                                    'button',
-                                                    {
-                                                      class: [
-                                                        'conversation-action-menu-item',
-                                                        'conversation-action-menu-danger'
-                                                      ],
-                                                      type: 'button',
-                                                      role: 'menuitem',
-                                                      disabled: activeRunConversationId.value === conversation.id,
-                                                      onClick: () => openDeleteConversation(conversation.id)
-                                                    },
-                                                    [renderActionIcon('trash'), h('span', text('deleteConversation'))]
-                                                  )
-                                                ])
-                                              : undefined
-                                          ])
-                                        ]
-                                      )
-                                    ),
+                                    ...group.conversations
+                                      .slice(0, conversationGroupDefaultVisibleCount)
+                                      .map(renderConversationItem),
                                     ...(groupHasMore && !collapsed
                                       ? [
                                           h(
@@ -3822,6 +3867,11 @@ const App = defineComponent({
                                             )
                                           )
                                         ]
+                                      : []),
+                                    ...(groupExpanded
+                                      ? group.conversations
+                                          .slice(conversationGroupDefaultVisibleCount)
+                                          .map(renderConversationItem)
                                       : [])
                                   ])
                             ]
@@ -3841,6 +3891,7 @@ const App = defineComponent({
               ),
               h('section', { class: 'chat-stage', 'aria-label': text('desktopSession') }, [
                 renderCopiedToast(),
+                renderReloadToast(),
                 h('header', { class: 'chat-header' }, [
                   h(
                     'button',

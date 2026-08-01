@@ -57,6 +57,18 @@ export type WebUiSlashCommandsResponse = {
   readonly commands: readonly WebUiSlashCommand[]
 }
 
+/** Real token usage surfaced by the desktop Data API (mirrors `MessageStats`). */
+export type WebUiMessageTokenStats = {
+  readonly totalTokens: number
+  readonly inputTokens?: number
+  readonly outputTokens?: number
+  readonly timeFirstTokenMs?: number
+  readonly timeCompletionMs?: number
+  readonly runtimeTiming?: boolean
+  readonly measuredOutputTokens?: number
+  readonly generationDurationMs?: number
+}
+
 export type WebUiMessageSnapshot = {
   readonly id: string
   readonly conversationId: string
@@ -70,6 +82,8 @@ export type WebUiMessageSnapshot = {
   readonly modelId?: string
   readonly status: 'pending' | 'success' | 'error' | 'paused'
   readonly processingTimeMs?: number
+  /** Real token usage reported by the desktop — absent when the row has no stats. */
+  readonly tokenStats?: WebUiMessageTokenStats
   readonly createdAt: string
 }
 
@@ -308,6 +322,15 @@ export type WebUiAgentSessionMessageEntity = {
   readonly status: 'pending' | 'success' | 'error' | 'paused'
   readonly modelId?: string | null
   readonly stats?: {
+    readonly inputTokens?: number
+    readonly outputTokens?: number
+    readonly totalTokens?: number
+    readonly providerPerformance?: {
+      readonly measuredOutputTokens?: number
+      readonly generationDurationMs?: number
+    } | null
+    readonly runtimeTiming?: unknown | null
+    readonly timeFirstTokenMs?: number
     readonly timeCompletionMs?: number
     readonly timeThinkingMs?: number
   } | null

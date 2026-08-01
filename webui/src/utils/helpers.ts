@@ -6,6 +6,7 @@ import type {
   WebUiCreateSessionWorkspace,
   WebUiMessagePart,
   WebUiMessageSnapshot,
+  WebUiMessageTokenStats,
   WebUiToolCallSnapshot,
   WebUiToolCallState,
   WebUiWorkspaceType
@@ -337,6 +338,7 @@ export const toMessageSnapshot = (message: WebUiAgentSessionMessageEntity): WebU
     message.stats?.timeThinkingMs ??
     parts.find((part) => part.type === 'reasoning')?.providerMetadata?.cherry?.thinkingMs
   const modelId = typeof message.modelId === 'string' && message.modelId.trim() ? message.modelId : undefined
+  const tokenStats = toMessageTokenStats(message.stats)
 
   return {
     id: message.id,
@@ -350,7 +352,35 @@ export const toMessageSnapshot = (message: WebUiAgentSessionMessageEntity): WebU
     ...(modelId ? { modelId } : {}),
     status: message.status,
     ...(processingTimeMs ? { processingTimeMs } : {}),
+    ...(tokenStats ? { tokenStats } : {}),
     createdAt: message.createdAt
+  }
+}
+
+/**
+ * Extracts the real token usage reported by the desktop (mirrors `MessageStats`).
+ * Returns undefined when the row carries no stats, so callers can fall back to
+ * a local estimate instead of showing nothing.
+ */
+export const toMessageTokenStats = (
+  stats: WebUiAgentSessionMessageEntity['stats']
+): WebUiMessageTokenStats | undefined => {
+  if (!stats) return undefined
+  const totalTokens = stats.totalTokens ?? (stats.inputTokens ?? 0) + (stats.outputTokens ?? 0)
+  if (!(totalTokens > 0)) return undefined
+  return {
+    totalTokens,
+    ...(stats.inputTokens !== undefined ? { inputTokens: stats.inputTokens } : {}),
+    ...(stats.outputTokens !== undefined ? { outputTokens: stats.outputTokens } : {}),
+    ...(stats.timeFirstTokenMs !== undefined ? { timeFirstTokenMs: stats.timeFirstTokenMs } : {}),
+    ...(stats.timeCompletionMs !== undefined ? { timeCompletionMs: stats.timeCompletionMs } : {}),
+    ...(stats.runtimeTiming ? { runtimeTiming: true } : {}),
+    ...(stats.providerPerformance?.measuredOutputTokens !== undefined
+      ? { measuredOutputTokens: stats.providerPerformance.measuredOutputTokens }
+      : {}),
+    ...(stats.providerPerformance?.generationDurationMs !== undefined
+      ? { generationDurationMs: stats.providerPerformance.generationDurationMs }
+      : {})
   }
 }
 

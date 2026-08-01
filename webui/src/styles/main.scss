@@ -4733,6 +4733,18 @@
       gap: 8px;
     }
 
+    /* Match the time display: let token text wrap on small screens instead of
+       staying on one nowrap line that overflows the bubble. */
+    .message-footer-meta {
+      flex-wrap: wrap;
+      gap: 4px 10px;
+    }
+
+    .message-estimated-tokens {
+      white-space: normal;
+      overflow-wrap: anywhere;
+    }
+
     .workspace-docx-preview {
       zoom: 0.4;
     }
