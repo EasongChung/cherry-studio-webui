@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   getAgent: vi.fn(),
   getProviderByProviderId: vi.fn(),
   getModelByKey: vi.fn(),
+  listProviderRegistryModels: vi.fn(),
   resolveApiKey: vi.fn(),
   getApiKeys: vi.fn(),
   getLastRuntimeResumeToken: vi.fn(),
@@ -52,7 +53,10 @@ vi.mock('@data/services/AgentSessionMessageService', () => ({
 }))
 
 vi.mock('@data/services/ProviderRegistryService', () => ({
-  providerRegistryService: { resolveReasoningProfile: mocks.resolveReasoningProfile }
+  providerRegistryService: {
+    resolveReasoningProfile: mocks.resolveReasoningProfile,
+    listProviderRegistryModels: mocks.listProviderRegistryModels
+  }
 }))
 
 vi.mock('@data/services/McpServerService', () => ({
@@ -128,6 +132,7 @@ describe('buildClaudeCodeQueryRequestForAgentSession resume-token precedence', (
       endpointConfigs: { 'anthropic-messages': { baseUrl: 'https://anthropic.example.com' } }
     })
     mocks.getModelByKey.mockReturnValue({ id: 'model-1', apiModelId: 'claude-sonnet' })
+    mocks.listProviderRegistryModels.mockReturnValue([])
     mocks.resolveEffectiveEndpoint.mockImplementation(resolveTestEffectiveEndpoint)
     mocks.resolveApiKey.mockReturnValue({
       value: 'api-key',
@@ -502,6 +507,9 @@ describe('buildClaudeCodeQueryRequestForAgentSession resume-token precedence', (
       apiModelId: 'deepseek-v4-pro',
       endpointTypes: [ENDPOINT_TYPE.OPENAI_CHAT_COMPLETIONS]
     })
+    mocks.listProviderRegistryModels.mockReturnValue([
+      { id: 'minimax-m2-5', endpointTypes: [ENDPOINT_TYPE.ANTHROPIC_MESSAGES] }
+    ])
     mocks.getLastRuntimeResumeToken.mockReturnValue(null)
 
     const request = await buildClaudeCodeQueryRequestForAgentSession('session-1')
@@ -513,6 +521,36 @@ describe('buildClaudeCodeQueryRequestForAgentSession resume-token precedence', (
       ANTHROPIC_MODEL: 'opencode:deepseek-v4-pro'
     })
     expect(request?.usageCapture).toEqual({ owner: 'provider-calls' })
+  })
+
+  it('routes a 1M DeepSeek model through its Anthropic endpoint instead of the gateway', async () => {
+    mocks.getAgent.mockReturnValue({ id: 'agent-1', model: 'deepseek::deepseek-chat' })
+    mocks.getProviderByProviderId.mockReturnValue({
+      id: 'deepseek',
+      defaultChatEndpoint: ENDPOINT_TYPE.OPENAI_CHAT_COMPLETIONS,
+      endpointConfigs: {
+        [ENDPOINT_TYPE.ANTHROPIC_MESSAGES]: { baseUrl: 'https://api.deepseek.com/anthropic' },
+        [ENDPOINT_TYPE.OPENAI_CHAT_COMPLETIONS]: { baseUrl: 'https://api.deepseek.com' }
+      }
+    })
+    mocks.getModelByKey.mockReturnValue({
+      id: 'deepseek-chat',
+      apiModelId: 'deepseek-chat',
+      contextWindow: 1_000_000,
+      endpointTypes: [ENDPOINT_TYPE.OPENAI_CHAT_COMPLETIONS]
+    })
+    mocks.listProviderRegistryModels.mockReturnValue([])
+    mocks.getLastRuntimeResumeToken.mockReturnValue(null)
+
+    const request = await buildClaudeCodeQueryRequestForAgentSession('session-1')
+
+    expect(mocks.apiGatewayEnsureKey).not.toHaveBeenCalled()
+    expect(request?.sdkModelId).toBe('deepseek-chat[1m]')
+    expect(request?.settings.env).toMatchObject({
+      ANTHROPIC_BASE_URL: 'https://api.deepseek.com/anthropic',
+      ANTHROPIC_MODEL: 'deepseek-chat[1m]'
+    })
+    expect(request?.usageCapture).toMatchObject({ owner: 'agent-sdk' })
   })
 
   it('captures distinct same-provider models for direct-route usage attribution', async () => {
