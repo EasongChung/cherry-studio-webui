@@ -188,9 +188,9 @@
   .conversation-group-chevron {
     display: inline-grid;
     place-items: center;
-    width: 18px;
+    width: 24px;
     color: #94a3b8;
-    font-size: 14px;
+    font-size: 18px;
     line-height: 1;
     transition: transform 0.12s ease;
   }
@@ -205,6 +205,11 @@
     width: 20px;
     font-size: 16px;
     line-height: 1;
+  }
+
+  .conversation-group-icon-no-project {
+    width: 24px;
+    font-size: 20px;
   }
 
   .conversation-group-label {
@@ -1839,6 +1844,25 @@
     align-items: center;
     justify-content: space-between;
     margin-top: 10px;
+  }
+
+  .message-footer-meta {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    min-width: 0;
+  }
+
+  .message-footer-meta .message-time {
+    margin-bottom: 0;
+  }
+
+  .message-estimated-tokens {
+    font-size: 12px;
+    line-height: 1.45;
+    opacity: 0.6;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
   }
 
   .message-actions {

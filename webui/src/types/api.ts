@@ -146,6 +146,10 @@ export type WebUiPermissionModeResponse = {
   readonly agent?: unknown
 }
 
+export type WebUiPreferencesResponse = {
+  readonly showEstimatedTokens: boolean
+}
+
 export type WebUiSseEventName = 'ready' | 'chunk' | 'sync' | 'error' | 'done'
 
 export type WebUiSseMessage<TData = unknown> = {
@@ -190,6 +194,8 @@ export type WebUiHealthResponse = {
 
 export type WebUiAuthStatusResponse = {
   readonly authRequired: boolean
+  /** Whether the current request is already authenticated (e.g. via the remember cookie). */
+  readonly authenticated?: boolean
   readonly language?: string | null
   readonly userName?: string | null
   readonly timestamp: string

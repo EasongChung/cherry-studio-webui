@@ -6,11 +6,14 @@ import AuthPanel from '../AuthPanel.vue'
 
 const text = (key: TextKey): string => key
 
-const mountAuthPanel = (props: { modelValue?: string; error?: string } = {}) =>
+const mountAuthPanel = (
+  props: { modelValue?: string; error?: string; rememberVerify?: 'off' | '3h' | '1d' | '1w' } = {}
+) =>
   mount(AuthPanel, {
     props: {
       modelValue: props.modelValue ?? '',
       error: props.error ?? '',
+      rememberVerify: props.rememberVerify ?? 'off',
       text,
       logoPath: './icon.png'
     }
@@ -45,6 +48,23 @@ describe('AuthPanel', () => {
     const wrapper = mountAuthPanel()
     await wrapper.find('input#webui-auth-key').trigger('keydown', { key: 'Enter' })
     expect(wrapper.emitted('verify')).toHaveLength(1)
+  })
+
+  it('renders the remember-verification select with the expected options', () => {
+    const wrapper = mountAuthPanel({ rememberVerify: '1d' })
+    const select = wrapper.find('select#webui-auth-remember')
+    expect(select.exists()).toBe(true)
+    expect((select.element as HTMLSelectElement).value).toBe('1d')
+    expect(select.findAll('option')).toHaveLength(4)
+  })
+
+  it('emits update:rememberVerify on select change', async () => {
+    const wrapper = mountAuthPanel()
+    const select = wrapper.find('select#webui-auth-remember')
+    await select.setValue('1w')
+    const emitted = wrapper.emitted('update:rememberVerify')
+    expect(emitted).toBeTruthy()
+    expect(emitted?.[0]?.[0]).toBe('1w')
   })
 
   it('shows the error message when provided', () => {
