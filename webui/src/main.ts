@@ -2853,6 +2853,29 @@ const App = defineComponent({
       }
     }
 
+    // Reload the current conversation when the user wheels down 3 times while near the bottom.
+    let bottomReloadWheelCount = 0
+    let bottomReloadWheelLastAt = 0
+    const handleMessageStackWheel = (event: WheelEvent) => {
+      if (event.deltaY <= 0) {
+        bottomReloadWheelCount = 0
+        return
+      }
+      if (distanceFromMessageStackBottom() > 96) {
+        bottomReloadWheelCount = 0
+        return
+      }
+      const now = performance.now()
+      if (now - bottomReloadWheelLastAt > 400) bottomReloadWheelCount = 0
+      bottomReloadWheelLastAt = now
+      bottomReloadWheelCount += 1
+      if (bottomReloadWheelCount >= 3) {
+        bottomReloadWheelCount = 0
+        const conversationId = selectedConversationId.value
+        if (conversationId) void loadConversationMessages(conversationId, 'refresh')
+      }
+    }
+
     const beginComposerResize = (event: PointerEvent) => {
       if (event.button !== 0) return
       event.preventDefault()
@@ -3633,46 +3656,8 @@ const App = defineComponent({
                               ),
                               collapsed
                                 ? undefined
-                                : h(
-                                    'div',
-                                    { class: 'conversation-group-items' },
-                                    visibleConversations.flatMap((conversation, index) => [
-                                      ...(groupHasMore &&
-                                      !collapsed &&
-                                      index === conversationGroupDefaultVisibleCount - 1
-                                        ? [
-                                            h(
-                                              'div',
-                                              { class: 'conversation-group-footer' },
-                                              h(
-                                                'button',
-                                                {
-                                                  class: [
-                                                    'conversation-group-show-more-button',
-                                                    { 'conversation-group-show-more-open': groupCanCollapse }
-                                                  ],
-                                                  type: 'button',
-                                                  'aria-expanded': groupExpanded,
-                                                  onClick: () => toggleConversationGroupExpanded(group.id)
-                                                },
-                                                [
-                                                  h(
-                                                    'span',
-                                                    {
-                                                      class: 'conversation-group-show-more-chevron',
-                                                      'aria-hidden': 'true'
-                                                    },
-                                                    renderActionIcon('down')
-                                                  ),
-                                                  h(
-                                                    'span',
-                                                    groupCanCollapse ? text('collapseGroupMore') : text('showMoreGroup')
-                                                  )
-                                                ]
-                                              )
-                                            )
-                                          ]
-                                        : []),
+                                : h('div', { class: 'conversation-group-items' }, [
+                                    ...visibleConversations.map((conversation) =>
                                       h(
                                         'div',
                                         {
@@ -3803,8 +3788,42 @@ const App = defineComponent({
                                           ])
                                         ]
                                       )
-                                    ])
-                                  )
+                                    ),
+                                    ...(groupHasMore && !collapsed
+                                      ? [
+                                          h(
+                                            'div',
+                                            { class: 'conversation-group-footer' },
+                                            h(
+                                              'button',
+                                              {
+                                                class: [
+                                                  'conversation-group-show-more-button',
+                                                  { 'conversation-group-show-more-open': groupCanCollapse }
+                                                ],
+                                                type: 'button',
+                                                'aria-expanded': groupExpanded,
+                                                onClick: () => toggleConversationGroupExpanded(group.id)
+                                              },
+                                              [
+                                                h(
+                                                  'span',
+                                                  {
+                                                    class: 'conversation-group-show-more-chevron',
+                                                    'aria-hidden': 'true'
+                                                  },
+                                                  renderActionIcon('down')
+                                                ),
+                                                h(
+                                                  'span',
+                                                  groupCanCollapse ? text('collapseGroupMore') : text('showMoreGroup')
+                                                )
+                                              ]
+                                            )
+                                          )
+                                        ]
+                                      : [])
+                                  ])
                             ]
                           )
                         ]
@@ -3947,7 +3966,8 @@ const App = defineComponent({
                     class: 'message-stack',
                     'aria-live': 'polite',
                     ref: messageStack,
-                    onScroll: updateMessageScrollState
+                    onScroll: updateMessageScrollState,
+                    onWheel: handleMessageStackWheel
                   },
                   [
                     olderMessagesCursor.value
