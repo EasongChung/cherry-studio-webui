@@ -2874,30 +2874,82 @@ const App = defineComponent({
       }
     }
 
-    // Reload the current conversation when the user wheels down 3 times while near the bottom.
-    // The 1200ms window tolerates fast trackpad momentum / notched wheel pulses between events.
-    let bottomReloadWheelCount = 0
-    let bottomReloadWheelLastAt = 0
+    // Reload the current conversation after 3 deliberate scroll-down gestures near the bottom.
+    // Desktop wheels fire many events per motion (smooth / free-spin wheels especially), so a
+    // raw event counter over-triggers. Instead group events into gestures by gap + minimum
+    // cumulative delta, and only count a gesture once it has scrolled a meaningful amount.
+    const bottomReloadGestureGapMs = 250
+    const bottomReloadScrollMinPx = 100
+    const bottomReloadWheelWindowMs = 2000
+    let bottomWheelReloadCount = 0
+    let bottomWheelReloadDelta = 0
+    let bottomWheelReloadLastAt = 0
+    // Mobile touch scrolling emits no wheel events, so track explicit pull-up gestures near the
+    // bottom (touchstart → upward touchmove → touchend) and reload after 3 of them.
+    let bottomTouchReloadCount = 0
+    let bottomTouchStartY = 0
+    let bottomTouchPulledUp = false
+    let bottomTouchLastEndAt = 0
+    const triggerConversationReload = () => {
+      const conversationId = selectedConversationId.value
+      if (!conversationId) return
+      showReloadHint()
+      void loadConversationMessages(conversationId, 'refresh')
+    }
     const handleMessageStackWheel = (event: WheelEvent) => {
-      if (event.deltaY <= 0) {
-        bottomReloadWheelCount = 0
-        return
-      }
-      if (distanceFromMessageStackBottom() > 96) {
-        bottomReloadWheelCount = 0
+      if (event.deltaY <= 0 || distanceFromMessageStackBottom() > 96) {
+        bottomWheelReloadCount = 0
+        bottomWheelReloadDelta = 0
         return
       }
       const now = performance.now()
-      if (now - bottomReloadWheelLastAt > 1200) bottomReloadWheelCount = 0
-      bottomReloadWheelLastAt = now
-      bottomReloadWheelCount += 1
-      if (bottomReloadWheelCount >= 3) {
-        bottomReloadWheelCount = 0
-        const conversationId = selectedConversationId.value
-        if (conversationId) {
-          showReloadHint()
-          void loadConversationMessages(conversationId, 'refresh')
+      if (now - bottomWheelReloadLastAt > bottomReloadWheelWindowMs) {
+        // The gesture sequence expired — start over.
+        bottomWheelReloadCount = 0
+        bottomWheelReloadDelta = 0
+      } else if (now - bottomWheelReloadLastAt > bottomReloadGestureGapMs) {
+        // A pause between motions marks a new gesture; drop the leftover (below-threshold)
+        // delta so each gesture must carry its own momentum to register.
+        bottomWheelReloadDelta = 0
+      }
+      bottomWheelReloadLastAt = now
+      const delta =
+        event.deltaMode === 1 ? event.deltaY * 40 : event.deltaMode === 2 ? event.deltaY * 600 : event.deltaY
+      bottomWheelReloadDelta += delta
+      if (bottomWheelReloadDelta >= bottomReloadScrollMinPx) {
+        bottomWheelReloadDelta = 0
+        bottomWheelReloadCount += 1
+        if (bottomWheelReloadCount >= 3) {
+          bottomWheelReloadCount = 0
+          triggerConversationReload()
         }
+      }
+    }
+    const handleMessageStackTouchStart = (event: TouchEvent) => {
+      const touch = event.touches[0]
+      if (!touch) return
+      if (distanceFromMessageStackBottom() > 96) bottomTouchReloadCount = 0
+      bottomTouchStartY = touch.clientY
+      bottomTouchPulledUp = false
+    }
+    const handleMessageStackTouchMove = (event: TouchEvent) => {
+      if (bottomTouchPulledUp) return
+      const touch = event.touches[0]
+      if (!touch) return
+      if (touch.clientY >= bottomTouchStartY) return
+      if (distanceFromMessageStackBottom() > 96) return
+      if (bottomTouchStartY - touch.clientY >= 20) bottomTouchPulledUp = true
+    }
+    const handleMessageStackTouchEnd = () => {
+      if (!bottomTouchPulledUp) return
+      bottomTouchPulledUp = false
+      const now = performance.now()
+      if (now - bottomTouchLastEndAt > 3000) bottomTouchReloadCount = 0
+      bottomTouchLastEndAt = now
+      bottomTouchReloadCount += 1
+      if (bottomTouchReloadCount >= 3) {
+        bottomTouchReloadCount = 0
+        triggerConversationReload()
       }
     }
 
@@ -4018,7 +4070,10 @@ const App = defineComponent({
                     'aria-live': 'polite',
                     ref: messageStack,
                     onScroll: updateMessageScrollState,
-                    onWheel: handleMessageStackWheel
+                    onWheel: handleMessageStackWheel,
+                    onTouchstart: handleMessageStackTouchStart,
+                    onTouchmove: handleMessageStackTouchMove,
+                    onTouchend: handleMessageStackTouchEnd
                   },
                   [
                     olderMessagesCursor.value
