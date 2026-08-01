@@ -1014,7 +1014,8 @@ export const createWebUiApiRouter = ({
               source: 'bytes',
               data: Buffer.from(attachment.dataUrl.slice(attachment.dataUrl.indexOf(',') + 1), 'base64'),
               name: path.parse(attachment.name).name || 'attachment',
-              ext: path.extname(attachment.name).slice(1) || null
+              ext: path.extname(attachment.name).slice(1) || null,
+              cleanupPolicy: 'delete_when_unreferenced'
             })
             createdEntryIds.push(entry.id)
             const physicalPath = fileManager.getPhysicalPath(entry.id)
