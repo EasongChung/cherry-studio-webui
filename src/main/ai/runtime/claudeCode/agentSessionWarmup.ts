@@ -763,18 +763,7 @@ function resolveRuntimeModelRef(
 
 function usesAnthropicMessagesEndpoint(ref: RuntimeModelRef): boolean {
   if (!ref.provider || !ref.model) return false
-  if (resolveEffectiveEndpoint(ref.provider, ref.model).endpointType === ENDPOINT_TYPE.ANTHROPIC_MESSAGES) return true
-
-  // Temporary rc.3 compatibility for the #17573 routing regression: some providers use
-  // OpenAI-compatible endpoints for chat but expose a separate Anthropic endpoint for Claude Code.
-  // Remove this fallback and follow upstream once an equivalent provider-routing fix is available.
-  if (!ref.provider.endpointConfigs?.[ENDPOINT_TYPE.ANTHROPIC_MESSAGES]) return false
-  return !providerRegistryService
-    .listProviderRegistryModels({
-      providerId: ref.provider.id,
-      presetProviderId: ref.provider.presetProviderId
-    })
-    .some((model) => model.endpointTypes?.includes(ENDPOINT_TYPE.ANTHROPIC_MESSAGES))
+  return resolveEffectiveEndpoint(ref.provider, ref.model).endpointType === ENDPOINT_TYPE.ANTHROPIC_MESSAGES
 }
 
 async function resolveApiGatewayRuntime(sessionId: string): Promise<{
