@@ -2010,6 +2010,13 @@ const App = defineComponent({
         // Open WebUI / after refresh: land on the newest session when nothing is selected.
         // Guard the index access: noUncheckedIndexedAccess still types [0] as possibly undefined.
         const latestConversation = conversations.value[0]
+        // Show only the newest session's workdir group (its first `conversationGroupDefaultVisibleCount`
+        // items) by default; collapse every other workdir group to its header. Not persisted, so a
+        // later load re-derives the layout from the then-newest session.
+        const latestGroupKey = latestConversation ? conversationGroupKey(latestConversation) : undefined
+        collapsedWorkdirGroupIds.value = new Set(
+          conversationGroups.value.filter((group) => group.id !== latestGroupKey).map((group) => group.id)
+        )
         if (!selectedConversationId.value && latestConversation) {
           // Auto-open the newest session without expanding its per-group show-more footer,
           // so a refreshed sidebar stays collapsed until the user explicitly expands it.
@@ -2878,12 +2885,17 @@ const App = defineComponent({
     // Desktop wheels fire many events per motion (smooth / free-spin wheels especially), so a
     // raw event counter over-triggers. Instead group events into gestures by gap + minimum
     // cumulative delta, and only count a gesture once it has scrolled a meaningful amount.
-    const bottomReloadGestureGapMs = 250
+    // A reload gesture is one deliberate scroll action: wheel events accumulate until the wheel rests
+    // for `bottomReloadGestureSettleMs`, then that motion settles as a single count. A fast multi-notch
+    // spin (events a few ms apart) therefore settles once instead of counting once per 100px.
+    const bottomReloadGestureSettleMs = 500
     const bottomReloadScrollMinPx = 100
-    const bottomReloadWheelWindowMs = 2000
+    // The user's cadence: roughly 0.5–2s between scroll actions. Anything slower resets the sequence.
+    const bottomReloadWheelWindowMs = 2500
     let bottomWheelReloadCount = 0
     let bottomWheelReloadDelta = 0
     let bottomWheelReloadLastAt = 0
+    let bottomWheelSettleTimer: number | undefined
     // Mobile touch scrolling emits no wheel events, so track explicit pull-up gestures near the
     // bottom (touchstart → upward touchmove → touchend) and reload after 3 of them.
     let bottomTouchReloadCount = 0
@@ -2896,26 +2908,8 @@ const App = defineComponent({
       showReloadHint()
       void loadConversationMessages(conversationId, 'refresh')
     }
-    const handleMessageStackWheel = (event: WheelEvent) => {
-      if (event.deltaY <= 0 || distanceFromMessageStackBottom() > 96) {
-        bottomWheelReloadCount = 0
-        bottomWheelReloadDelta = 0
-        return
-      }
-      const now = performance.now()
-      if (now - bottomWheelReloadLastAt > bottomReloadWheelWindowMs) {
-        // The gesture sequence expired — start over.
-        bottomWheelReloadCount = 0
-        bottomWheelReloadDelta = 0
-      } else if (now - bottomWheelReloadLastAt > bottomReloadGestureGapMs) {
-        // A pause between motions marks a new gesture; drop the leftover (below-threshold)
-        // delta so each gesture must carry its own momentum to register.
-        bottomWheelReloadDelta = 0
-      }
-      bottomWheelReloadLastAt = now
-      const delta =
-        event.deltaMode === 1 ? event.deltaY * 40 : event.deltaMode === 2 ? event.deltaY * 600 : event.deltaY
-      bottomWheelReloadDelta += delta
+    const settleBottomWheelGesture = () => {
+      bottomWheelSettleTimer = undefined
       if (bottomWheelReloadDelta >= bottomReloadScrollMinPx) {
         bottomWheelReloadDelta = 0
         bottomWheelReloadCount += 1
@@ -2923,7 +2917,35 @@ const App = defineComponent({
           bottomWheelReloadCount = 0
           triggerConversationReload()
         }
+      } else {
+        bottomWheelReloadDelta = 0
       }
+    }
+    const handleMessageStackWheel = (event: WheelEvent) => {
+      if (event.deltaY <= 0 || distanceFromMessageStackBottom() > 96) {
+        // Upward scroll or leaving the bottom resets the sequence and cancels a pending settle.
+        bottomWheelReloadCount = 0
+        bottomWheelReloadDelta = 0
+        if (bottomWheelSettleTimer !== undefined) {
+          window.clearTimeout(bottomWheelSettleTimer)
+          bottomWheelSettleTimer = undefined
+        }
+        return
+      }
+      const now = performance.now()
+      if (now - bottomWheelReloadLastAt > bottomReloadWheelWindowMs) {
+        // The gap between scroll actions exceeded the cadence — start the sequence over.
+        bottomWheelReloadCount = 0
+        bottomWheelReloadDelta = 0
+      }
+      bottomWheelReloadLastAt = now
+      const delta =
+        event.deltaMode === 1 ? event.deltaY * 40 : event.deltaMode === 2 ? event.deltaY * 600 : event.deltaY
+      bottomWheelReloadDelta += delta
+      // Arm/restart the settle timer: once the wheel rests for `bottomReloadGestureSettleMs`, the
+      // accumulated motion counts as one deliberate scroll action.
+      if (bottomWheelSettleTimer !== undefined) window.clearTimeout(bottomWheelSettleTimer)
+      bottomWheelSettleTimer = window.setTimeout(settleBottomWheelGesture, bottomReloadGestureSettleMs)
     }
     const handleMessageStackTouchStart = (event: TouchEvent) => {
       const touch = event.touches[0]
@@ -3507,6 +3529,7 @@ const App = defineComponent({
 
     onBeforeUnmount(() => {
       clearStatusPreviewTimers()
+      if (bottomWheelSettleTimer !== undefined) window.clearTimeout(bottomWheelSettleTimer)
       if (workspaceFileSearchTimer !== undefined) window.clearTimeout(workspaceFileSearchTimer)
       releaseWorkspacePreview()
       if (healthTimer) window.clearInterval(healthTimer)
