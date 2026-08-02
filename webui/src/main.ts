@@ -14,6 +14,7 @@ import {
   watch
 } from 'vue'
 
+import AskUserQuestionPanel from './components/AskUserQuestionPanel.vue'
 import AuthPanel, { type RememberVerifyOption } from './components/AuthPanel.vue'
 import PermissionRequestPanel from './components/PermissionRequestPanel.vue'
 import ToolCallBlock from './components/ToolCallBlock.vue'
@@ -815,7 +816,8 @@ const App = defineComponent({
     const respondToolApproval = async (
       tool: WebUiToolCallSnapshot,
       message: WebUiMessageSnapshot,
-      approved: boolean
+      approved: boolean,
+      updatedInput?: Record<string, unknown>
     ) => {
       const conversationId = selectedConversationId.value
       const approvalId = tool.approvalId
@@ -829,7 +831,8 @@ const App = defineComponent({
           {
             approvalId,
             approved,
-            ...(approved ? {} : { reason: text('denyTool') })
+            ...(approved ? {} : { reason: text('denyTool') }),
+            ...(updatedInput !== undefined ? { updatedInput } : {})
           }
         )
       } catch (error) {
@@ -861,9 +864,34 @@ const App = defineComponent({
       return `${trimmed.slice(0, max)}…`
     }
 
+    /** Desktop interactive tools that surface a structured question UI (AskUserQuestion). */
+    const isAskUserQuestionToolName = (name: string) => name === 'AskUserQuestion' || name === 'builtin_AskUserQuestion'
+
+    /** Whether the current conversation has an active stream (either tracked or detected from pending messages). */
+    const isCurrentlyStreaming = computed(() => {
+      if (activeRunConversationId.value === selectedConversationId.value) return true
+      if (!selectedConversationId.value) return false
+      // Fallback: check if the last assistant message in the selected conversation is still pending.
+      for (const message of messages.value) {
+        if (message.conversationId === selectedConversationId.value && message.status === 'pending') return true
+      }
+      return false
+    })
+
     const renderPermissionRequestOverlay = () => {
       const pending = pendingToolApproval.value
       if (!pending) return undefined
+      if (isAskUserQuestionToolName(pending.tool.name)) {
+        return h(AskUserQuestionPanel, {
+          tool: pending.tool,
+          message: pending.message,
+          text,
+          submitting: isApprovalSubmitting(pending.message.id, pending.tool.id),
+          approvalError: approvalErrorByKey.value[approvalKey(pending.message.id, pending.tool.id)],
+          onSubmit: (updatedInput) => void respondToolApproval(pending.tool, pending.message, true, updatedInput),
+          onDeny: () => void respondToolApproval(pending.tool, pending.message, false)
+        })
+      }
       return h(PermissionRequestPanel, {
         tool: pending.tool,
         message: pending.message,
@@ -2702,6 +2730,11 @@ const App = defineComponent({
               : previousTool?.input
                 ? { input: previousTool.input }
                 : {}),
+          ...(chunk.type === 'tool-approval-request' && chunk.input !== undefined
+            ? { rawInput: chunk.input }
+            : previousTool?.rawInput
+              ? { rawInput: previousTool.rawInput }
+              : {}),
           ...(output ? { output } : previousTool?.output ? { output: previousTool.output } : {}),
           ...(chunk.errorText
             ? { errorText: chunk.errorText }
@@ -4392,7 +4425,7 @@ const App = defineComponent({
                               'send-button',
                               {
                                 'send-button-is-stop':
-                                  activeRunConversationId.value === selectedConversationId.value &&
+                                  isCurrentlyStreaming.value &&
                                   !composerText.value.trim() &&
                                   attachments.value.length === 0
                               }
@@ -4400,26 +4433,21 @@ const App = defineComponent({
                             type: 'button',
                             disabled:
                               !selectedConversation.value ||
-                              (Boolean(pendingToolApproval.value) &&
-                                activeRunConversationId.value !== selectedConversationId.value) ||
+                              (Boolean(pendingToolApproval.value) && !isCurrentlyStreaming.value) ||
                               (!composerText.value.trim() &&
                                 attachments.value.length === 0 &&
-                                activeRunConversationId.value !== selectedConversationId.value),
+                                !isCurrentlyStreaming.value),
                             'aria-label':
-                              activeRunConversationId.value === selectedConversationId.value &&
-                              !composerText.value.trim() &&
-                              attachments.value.length === 0
+                              isCurrentlyStreaming.value && !composerText.value.trim() && attachments.value.length === 0
                                 ? text('stop')
                                 : text('send'),
                             title:
-                              activeRunConversationId.value === selectedConversationId.value &&
-                              !composerText.value.trim() &&
-                              attachments.value.length === 0
+                              isCurrentlyStreaming.value && !composerText.value.trim() && attachments.value.length === 0
                                 ? text('stop')
                                 : text('send'),
                             onClick: () => {
                               if (
-                                activeRunConversationId.value === selectedConversationId.value &&
+                                isCurrentlyStreaming.value &&
                                 !composerText.value.trim() &&
                                 attachments.value.length === 0
                               ) {

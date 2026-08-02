@@ -145,6 +145,11 @@ export type WebUiToolCallSnapshot = {
   readonly input?: string
   readonly output?: string
   readonly errorText?: string
+  /**
+   * Structured `tool-approval-request` payload kept verbatim for interactive tools such as
+   * AskUserQuestion, whose input must not be flattened to display text before rendering.
+   */
+  readonly rawInput?: unknown
 }
 
 export type WebUiPermissionMode = 'default' | 'plan' | 'acceptEdits' | 'bypassPermissions'

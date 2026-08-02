@@ -85,6 +85,8 @@ type WebUiToolApprovalBody = {
   readonly approvalId: string
   readonly approved: boolean
   readonly reason?: string
+  /** Optional user-authored tool input (e.g. AskUserQuestion answers) passed through to the runtime. */
+  readonly updatedInput?: Record<string, unknown>
 }
 
 const WEBUI_PERMISSION_MODES = ['default', 'acceptEdits', 'bypassPermissions', 'plan'] as const
@@ -292,14 +294,28 @@ const parseUpdatePermissionModeBody = (value: unknown): WebUiUpdatePermissionMod
 
 const parseToolApprovalBody = (value: unknown): WebUiToolApprovalBody | undefined => {
   if (!value || typeof value !== 'object') return undefined
-  const candidate = value as { approvalId?: unknown; approved?: unknown; reason?: unknown }
+  const candidate = value as {
+    approvalId?: unknown
+    approved?: unknown
+    reason?: unknown
+    updatedInput?: unknown
+  }
   if (typeof candidate.approvalId !== 'string' || !candidate.approvalId.trim()) return undefined
   if (typeof candidate.approved !== 'boolean') return undefined
   if (candidate.reason !== undefined && typeof candidate.reason !== 'string') return undefined
+  if (
+    candidate.updatedInput !== undefined &&
+    (typeof candidate.updatedInput !== 'object' ||
+      candidate.updatedInput === null ||
+      Array.isArray(candidate.updatedInput))
+  ) {
+    return undefined
+  }
   return {
     approvalId: candidate.approvalId.trim(),
     approved: candidate.approved,
-    ...(typeof candidate.reason === 'string' && candidate.reason.trim() ? { reason: candidate.reason.trim() } : {})
+    ...(typeof candidate.reason === 'string' && candidate.reason.trim() ? { reason: candidate.reason.trim() } : {}),
+    ...(candidate.updatedInput !== undefined ? { updatedInput: candidate.updatedInput as Record<string, unknown> } : {})
   }
 }
 
@@ -934,7 +950,8 @@ export const createWebUiApiRouter = ({
 
         const ok = application.get('AgentSessionRuntimeService').respondToolApproval(body.approvalId, {
           approved: body.approved,
-          ...(body.reason ? { reason: body.reason } : {})
+          ...(body.reason ? { reason: body.reason } : {}),
+          ...(body.updatedInput !== undefined ? { updatedInput: body.updatedInput } : {})
         })
         if (!ok) {
           return {
