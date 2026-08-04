@@ -1,6 +1,7 @@
 import { Checkbox, ConfirmDialog } from '@cherrystudio/ui'
 import { usePreference } from '@data/hooks/usePreference'
 import CitationsPanel from '@renderer/components/chat/citations/CitationsPanel'
+import { ChatLayoutModeProvider } from '@renderer/components/chat/layout/ChatLayoutModeContext'
 import {
   type ResourcePaneConfig,
   ResourcePaneCountButton,
@@ -19,7 +20,10 @@ import {
   AgentConversationControls,
   type AgentConversationControlsProps
 } from '@renderer/components/composer/variants/agent/AgentConversationControls'
-import { MissingAgentHomeComposer } from '@renderer/components/composer/variants/AgentComposer'
+import {
+  type AgentComposerLaunchOptions,
+  MissingAgentHomeComposer
+} from '@renderer/components/composer/variants/AgentComposer'
 import { useCache, useSharedCache } from '@renderer/data/hooks/useCache'
 import { useAgent, useUpdateAgent } from '@renderer/hooks/agent/useAgent'
 import { useAgentModelFilter } from '@renderer/hooks/agent/useAgentModelFilter'
@@ -107,6 +111,7 @@ interface AgentChatProps {
   sessionPaneOpen?: boolean
   onSessionPaneOpenChange?: (open: boolean) => void
   sessionPaneUserOpenIntentSeq?: number
+  composerLaunchOptions?: AgentComposerLaunchOptions
 }
 
 interface AgentChatLayoutProps {
@@ -169,7 +174,8 @@ const AgentChat = ({
   resourcePaneRevealRequest,
   sessionPaneOpen,
   onSessionPaneOpenChange,
-  sessionPaneUserOpenIntentSeq
+  sessionPaneUserOpenIntentSeq,
+  composerLaunchOptions
 }: AgentChatProps) => {
   const { t } = useTranslation()
   const [messageStyle] = usePreference('chat.message.style')
@@ -219,29 +225,11 @@ const AgentChat = ({
         (!!activeSession && activeSessionSource === 'none'))
   )
   const sessionMessagesEnabled = Boolean(sessionSnapshot && activeSession && activeSession.id === sessionSnapshot.id)
-  const greetingContextRef = useRef<{ sessionId: string; text: string } | null>(null)
-  const handleGreetingChange = useCallback(
-    (greeting: string | null) => {
-      const sessionId = sessionSnapshot?.id
-      if (!sessionId) return
-      if (greeting) {
-        greetingContextRef.current = { sessionId, text: greeting }
-      } else if (greetingContextRef.current?.sessionId === sessionId) {
-        greetingContextRef.current = null
-      }
-    },
-    [sessionSnapshot?.id]
-  )
-  const getGreetingContext = useCallback(() => {
-    const current = greetingContextRef.current
-    return current && current.sessionId === sessionSnapshot?.id ? current.text : undefined
-  }, [sessionSnapshot?.id])
   const runtime = useAgentChatRuntimeState({
     sessionId: sessionSnapshot?.id ?? '',
     sessionMessagesEnabled,
     sessionHistoryFetchOnMount: shouldFetchSessionHistoryOnMount,
-    reservedMessages: EMPTY_MESSAGES,
-    getGreetingContext
+    reservedMessages: EMPTY_MESSAGES
   })
   const {
     hasOlder: runtimeHasOlder,
@@ -463,7 +451,7 @@ const AgentChat = ({
         sessionMessagesEnabled={sessionMessagesEnabled}
         onOpenCitationsPanel={handleOpenCitationsPanel}
         onCreateEmptySession={sessionAgentId && onCreateEmptySession ? handleCreateEmptySession : undefined}
-        onGreetingChange={handleGreetingChange}
+        composerLaunchOptions={composerLaunchOptions}
       />
     )
   }
@@ -558,7 +546,7 @@ interface AgentChatSessionCenterProps {
   sessionMessagesEnabled: boolean
   onOpenCitationsPanel: (payload: { citations: Citation[] }) => void
   onCreateEmptySession?: () => void | Promise<unknown>
-  onGreetingChange: (greeting: string | null) => void
+  composerLaunchOptions?: AgentComposerLaunchOptions
 }
 
 const AgentChatSessionCenter = ({
@@ -575,7 +563,7 @@ const AgentChatSessionCenter = ({
   sessionMessagesEnabled,
   onOpenCitationsPanel,
   onCreateEmptySession,
-  onGreetingChange
+  composerLaunchOptions
 }: AgentChatSessionCenterProps) => {
   const composer = (
     <AgentComposerSlot
@@ -587,12 +575,12 @@ const AgentChatSessionCenter = ({
       session={session}
       sessionId={runtime.sessionId}
       sendMessage={runtime.sendMessage}
-      captureLocalSendScrollEligibility={runtime.captureLocalSendScrollEligibility}
       stop={runtime.stop}
       isStreaming={runtime.isPending}
       sendDisabled={composerPending}
       onCreateEmptySession={onCreateEmptySession}
       composerContext={runtime.composerContext}
+      composerLaunchOptions={composerLaunchOptions}
     />
   )
   const main = (
@@ -601,9 +589,6 @@ const AgentChatSessionCenter = ({
         <div className="pointer-events-none absolute inset-0 z-10">
           <ConversationGreeting
             avatar={activeAgent ? getAgentAvatarFromConfiguration(activeAgent.configuration) : undefined}
-            conversationId={session.id}
-            mode="agent"
-            onGreetingChange={onGreetingChange}
             title={homeWelcomeText ?? ''}
           />
         </div>
@@ -617,8 +602,6 @@ const AgentChatSessionCenter = ({
         activeAgent={activeAgent}
         partsByMessageId={runtime.partsByMessageId}
         streamingLayers={runtime.streamingLayers}
-        localSendGeneration={runtime.localSendGeneration}
-        onBindRuntime={runtime.bindMessageListRuntime}
         optimisticAskUserQuestionInputsByToolCallId={runtime.optimisticAskUserQuestionInputsByToolCallId}
         isLoading={runtime.isLoading}
         hasOlder={runtime.hasOlder}
@@ -691,7 +674,11 @@ function AgentChatLayout({
         topBar={topBar}
         topRightTool={topRightTool}
         showTopRightToolWhenPaneOpen
-        center={center}
+        center={
+          // The layout-mode provider links the message column and the composer so
+          // both yield the same anchor-rail gutter and stay aligned.
+          <ChatLayoutModeProvider>{center}</ChatLayoutModeProvider>
+        }
         sidePanel={sidePanel}
         rightPane={<AgentRightPane.Viewport />}
         centerId={centerSurface?.id}

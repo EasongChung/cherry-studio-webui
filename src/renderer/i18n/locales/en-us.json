@@ -198,11 +198,6 @@
       "tooltip": "Git Bash is required to run agents on Windows. Install from git-scm.com if not available."
     },
     "home": {
-      "local_greetings": {
-        "plan": "Tell me the outcome you want, and I’ll help make a plan.",
-        "progress": "What task can I help you move forward today?",
-        "research": "Need help researching, planning, or drafting something?"
-      },
       "welcome_title": "What should we work on today?"
     },
     "icon": {
@@ -1421,6 +1416,11 @@
         "placeholder": "Search"
       }
     },
+    "compaction": {
+      "compacted": "Context compacted, ~{{count}} tokens saved",
+      "compacted_plain": "Context compacted",
+      "compacting": "Compacting context…"
+    },
     "conversation": {
       "new": "New Chat"
     },
@@ -1443,11 +1443,6 @@
       "view_full_content": "View Full Content"
     },
     "home": {
-      "local_greetings": {
-        "casual": "What’s on your mind today?",
-        "explore": "What would you like to explore together?",
-        "play": "Up for a quick chat, a curious question, or a game?"
-      },
       "welcome_title": "What should we talk about today?"
     },
     "input": {
@@ -1605,7 +1600,6 @@
         "image_or_document": "Upload image or document file",
         "upload_from_local": "Upload local file..."
       },
-      "url_context": "URL Context",
       "web_search": {
         "builtin": {
           "disabled_content": "The current model does not support web search",
@@ -1622,13 +1616,16 @@
           "description": "Do not enable web search",
           "label": "Disable Web Search"
         },
+        "route": {
+          "builtin": "Searches with the model's built-in tool",
+          "client": "Searches with {{provider}}"
+        },
         "settings": "Web Search Settings"
       }
     },
     "mcp": {
       "warning": {
-        "gemini_web_search": "Gemini does not support using native web search tools and function calling simultaneously",
-        "url_context": "Gemini does not support using url context and function calling simultaneously"
+        "gemini_web_search": "Gemini does not support using native web search tools and function calling simultaneously"
       }
     },
     "message": {
@@ -1705,6 +1702,9 @@
       }
     },
     "navigation": {
+      "anchor": {
+        "jump_to_turn": "Jump to turn {{number}}"
+      },
       "bottom": "Back to bottom",
       "close": "Close",
       "first": "Already at the first message",
@@ -3174,6 +3174,7 @@
         "threshold": "Similarity threshold for filtering low-relevance reranked chunks. Higher values make retrieval stricter."
       },
       "processor": "Processing Provider",
+      "processor_not_configured": "Not configured",
       "rerank_disabled": "Disabled",
       "rerank_model": "Rerank Model",
       "reset_action": "Restore Defaults",
@@ -3373,7 +3374,7 @@
             "label": "Small model"
           }
         },
-        "model_config": "Model configuration",
+        "model_config": "Model",
         "section": {
           "advanced": {
             "desc": "Max turns and environment variables",
@@ -3424,7 +3425,12 @@
         }
       },
       "basic": {
+        "context_compress_enabled": "Auto-compress",
+        "context_compress_model": "Compression model",
+        "context_compress_model_follow": "Default",
         "context_count": "Context count",
+        "context_management": "Context management",
+        "context_truncate_threshold": "Tool-output truncation threshold (chars)",
         "creative": "Creative",
         "custom_params": "Custom parameters",
         "custom_params_add": "Add parameter",
@@ -3436,8 +3442,17 @@
           "avatar": {
             "hint": "Used to identify the assistant in the library and chats"
           },
+          "context_compress_enabled": {
+            "hint": "Summarize older turns automatically when nearing the context window"
+          },
           "context_count": {
             "hint": "Number of recent messages kept as context"
+          },
+          "context_management": {
+            "hint": "Override global context-management settings for this assistant; off inherits the global settings"
+          },
+          "context_truncate_threshold": {
+            "hint": "Tool outputs beyond this many characters are offloaded and truncated"
           },
           "custom_params": {
             "hint": "Extra provider parameters sent with requests"
@@ -4281,6 +4296,7 @@
       "cutoff": "Truncating search content...",
       "fetch_complete": "{{count}} search result(s)",
       "fetch_empty": "No search results found",
+      "fetch_opaque": "Searched by the model",
       "partial_failure": "{{count}} search result(s), some searches failed"
     }
   },
@@ -5153,6 +5169,7 @@
     "reset": "Reset",
     "rotate_left": "Rotate Left",
     "rotate_right": "Rotate Right",
+    "save_as": "Save As",
     "source": "View Source Code",
     "zoom_in": "Zoom In",
     "zoom_out": "Zoom Out"
@@ -5209,7 +5226,7 @@
     "jina": "Jina",
     "lanyun": "LANYUN",
     "lmstudio": "LM Studio",
-    "local-embedding": "Qwen3 Embedding 0.6B",
+    "local-embedding": "Local Models",
     "longcat": "LongCat AI",
     "mimo": "Xiaomi MiMo",
     "mineru": "MinerU",
@@ -5791,7 +5808,25 @@
         "title": "Enterprise"
       },
       "feedback": {
+        "agent": {
+          "description": "Chat with Cherry Assistant to share feedback.",
+          "title": "Use Agent"
+        },
+        "agent_error": "Unable to open Cherry Assistant for feedback. Please try again.",
         "button": "Feedback",
+        "dialog": {
+          "description": "Choose how to share feedback and help us make Cherry Studio better.",
+          "title": "Choose a feedback channel"
+        },
+        "github": {
+          "description": "Create a bug report or feature request on GitHub.",
+          "title": "GitHub Issue"
+        },
+        "recommended": "Recommended",
+        "survey": {
+          "description": "Share feedback through our Feishu survey.",
+          "title": "Feedback survey"
+        },
         "title": "Feedback"
       },
       "label": "About & Feedback",
@@ -6788,6 +6823,7 @@
         "allStatuses": "All statuses",
         "allTypes": "All types",
         "builtinOnly": "Built-in only",
+        "label": "Filter",
         "status": "Filter by status",
         "type": "Filter by type"
       },
@@ -6854,6 +6890,9 @@
         "loadError": "Get prompts Error",
         "noPromptsAvailable": "No prompts available",
         "requiredField": "Required Field"
+      },
+      "protocolInstall": {
+        "title": "Install MCP"
       },
       "protocolInstallWarning": {
         "command": "Startup command",
@@ -7374,10 +7413,6 @@
       "prevent_sleep_when_busy": "Keep the system awake while tasks are running"
     },
     "privacy": {
-      "contextual_greetings": {
-        "description": "Local rotating Chat and Agent greetings are generated on your device and remain available while this option is off. The displayed greeting is included as untrusted context in your first message so your selected model can understand brief replies; developer traces may record it. Enable this option to contact IPInfo for a coarse country or region; if unavailable, the app uses the app-language region as a labeled fallback. The country or region hint, your name, app language, local date and time, time zone, Chat or Agent mode, the base fallback greeting, and the previous greeting are sent to the fixed built-in CherryAI Qwen model for contextual enhancement. Disabled by default.",
-        "title": "AI-enhanced contextual greetings"
-      },
       "enable_privacy_mode": "Anonymous reporting of errors and statistics",
       "title": "Privacy Settings"
     },
@@ -8078,6 +8113,10 @@
         "check": "Check",
         "check_failed": "Verification failed",
         "check_success": "Verification successful",
+        "client_tools_preferred": {
+          "description": "Use the search and URL-fetch services configured above even when the model has built-in search. When off, the model handles it.",
+          "label": "Prefer configured search services"
+        },
         "compression": {
           "cutoff": {
             "limit": {
@@ -8104,7 +8143,7 @@
           "save_failed": "Save failed",
           "zhipu_sync_failed": "Failed to sync Zhipu API key to Web Search. Please re-save the key or check Web Search settings."
         },
-        "fetch_urls_provider": "Default URL fetch provider",
+        "fetch_urls_provider": "URL fetch provider",
         "free": "Free",
         "is_default": "Default",
         "local_provider": {
