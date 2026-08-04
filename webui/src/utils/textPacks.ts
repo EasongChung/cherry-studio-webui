@@ -227,7 +227,10 @@ export const textPacks = {
     multiSelectExit: 'Exit multi-select',
     selectAgent: 'Select agent',
     workspace: 'Workspace',
-    workspaceSelectPlaceholder: 'Select a workspace…'
+    workspaceSelectPlaceholder: 'Select a workspace…',
+    quote: 'Quote',
+    emptyConversationGreetingTitle: 'How can I help you?',
+    emptyConversationGreeting: 'Start a conversation by typing a message below.'
   },
   'zh-CN': {
     agent: '智能体',
@@ -449,7 +452,10 @@ export const textPacks = {
     multiSelectExit: '退出多选',
     selectAgent: '选择助手',
     workspace: '工作目录',
-    workspaceSelectPlaceholder: '选择工作目录…'
+    workspaceSelectPlaceholder: '选择工作目录…',
+    quote: '引用',
+    emptyConversationGreetingTitle: '有什么可以帮你的？',
+    emptyConversationGreeting: '在下方输入消息开始吧。'
   },
   'zh-TW': {
     agent: '智慧體',
@@ -671,7 +677,10 @@ export const textPacks = {
     multiSelectExit: '退出多選',
     selectAgent: '選擇助手',
     workspace: '工作目錄',
-    workspaceSelectPlaceholder: '選擇工作目錄…'
+    workspaceSelectPlaceholder: '選擇工作目錄…',
+    quote: '引用',
+    emptyConversationGreetingTitle: '有什麼可以幫你的？',
+    emptyConversationGreeting: '在下方輸入訊息開始吧。'
   },
   'ja-JP': {
     agent: 'エージェント',
@@ -898,7 +907,10 @@ export const textPacks = {
     multiSelectExit: '複数選択を終了',
     selectAgent: 'エージェントを選択',
     workspace: 'ワークスペース',
-    workspaceSelectPlaceholder: 'ワークスペースを選択…'
+    workspaceSelectPlaceholder: 'ワークスペースを選択…',
+    quote: '引用',
+    emptyConversationGreetingTitle: '何かお手伝いしましょうか？',
+    emptyConversationGreeting: '下にメッセージを入力して始めましょう。'
   },
   'de-DE': {
     agent: 'Agent',
@@ -1129,7 +1141,10 @@ export const textPacks = {
     multiSelectExit: 'Mehrfachauswahl beenden',
     selectAgent: 'Agent auswählen',
     workspace: 'Arbeitsbereich',
-    workspaceSelectPlaceholder: 'Arbeitsbereich auswählen…'
+    workspaceSelectPlaceholder: 'Arbeitsbereich auswählen…',
+    quote: 'Zitat',
+    emptyConversationGreetingTitle: 'Wie kann ich helfen?',
+    emptyConversationGreeting: 'Beginne, indem du unten eine Nachricht eingibst.'
   },
   'fr-FR': {
     agent: 'Agent',
@@ -1359,7 +1374,10 @@ export const textPacks = {
     multiSelectExit: 'Quitter la sélection multiple',
     selectAgent: 'Sélectionner un agent',
     workspace: 'Espace de travail',
-    workspaceSelectPlaceholder: 'Sélectionner un espace de travail…'
+    workspaceSelectPlaceholder: 'Sélectionner un espace de travail…',
+    quote: 'Citation',
+    emptyConversationGreetingTitle: 'Comment puis-je vous aider ?',
+    emptyConversationGreeting: 'Commencez en saisissant un message ci-dessous.'
   },
   'es-ES': {
     agent: 'Agente',
@@ -1588,7 +1606,10 @@ export const textPacks = {
     multiSelectExit: 'Salir de selección múltiple',
     selectAgent: 'Seleccionar agente',
     workspace: 'Espacio de trabajo',
-    workspaceSelectPlaceholder: 'Seleccionar un espacio de trabajo…'
+    workspaceSelectPlaceholder: 'Seleccionar un espacio de trabajo…',
+    quote: 'Cita',
+    emptyConversationGreetingTitle: '¿En qué puedo ayudarte?',
+    emptyConversationGreeting: 'Empieza escribiendo un mensaje a continuación.'
   },
   'ru-RU': {
     agent: 'Агент',
@@ -1817,7 +1838,10 @@ export const textPacks = {
     multiSelectExit: 'Выйти из множественного выбора',
     selectAgent: 'Выбрать агента',
     workspace: 'Рабочая область',
-    workspaceSelectPlaceholder: 'Выбрать рабочую область…'
+    workspaceSelectPlaceholder: 'Выбрать рабочую область…',
+    quote: 'Цитата',
+    emptyConversationGreetingTitle: 'Чем могу помочь?',
+    emptyConversationGreeting: 'Начните, введя сообщение ниже.'
   },
   'el-GR': {
     agent: 'Πράκτορας',
@@ -2050,7 +2074,10 @@ export const textPacks = {
     multiSelectExit: 'Έξοδος από πολλαπλή επιλογή',
     selectAgent: 'Επιλογή πράκτορα',
     workspace: 'Χώρος εργασίας',
-    workspaceSelectPlaceholder: 'Επιλέξτε χώρο εργασίας…'
+    workspaceSelectPlaceholder: 'Επιλέξτε χώρο εργασίας…',
+    quote: 'Παράθεση',
+    emptyConversationGreetingTitle: 'Πώς μπορώ να βοηθήσω;',
+    emptyConversationGreeting: 'Ξεκινήστε πληκτρολογώντας ένα μήνυμα παρακάτω.'
   },
   'pt-PT': {
     agent: 'Agente',
@@ -2282,7 +2309,10 @@ export const textPacks = {
     multiSelectExit: 'Sair da seleção múltipla',
     selectAgent: 'Selecionar agente',
     workspace: 'Espaço de trabalho',
-    workspaceSelectPlaceholder: 'Selecionar um espaço de trabalho…'
+    workspaceSelectPlaceholder: 'Selecionar um espaço de trabalho…',
+    quote: 'Citação',
+    emptyConversationGreetingTitle: 'Como posso ajudar?',
+    emptyConversationGreeting: 'Comece digitando uma mensagem abaixo.'
   },
   'ro-RO': {
     agent: 'Agent',
@@ -2511,7 +2541,10 @@ export const textPacks = {
     multiSelectExit: 'Ieșire din selecția multiplă',
     selectAgent: 'Selectați agentul',
     workspace: 'Spațiu de lucru',
-    workspaceSelectPlaceholder: 'Selectați un spațiu de lucru…'
+    workspaceSelectPlaceholder: 'Selectați un spațiu de lucru…',
+    quote: 'Citat',
+    emptyConversationGreetingTitle: 'Cum vă pot ajuta?',
+    emptyConversationGreeting: 'Începeți tastând un mesaj mai jos.'
   },
   'vi-VN': {
     agent: 'Tác nhân',
@@ -2738,7 +2771,10 @@ export const textPacks = {
     multiSelectExit: 'Thoát chọn nhiều',
     selectAgent: 'Chọn tác nhân',
     workspace: 'Không gian làm việc',
-    workspaceSelectPlaceholder: 'Chọn không gian làm việc…'
+    workspaceSelectPlaceholder: 'Chọn không gian làm việc…',
+    quote: 'Trích dẫn',
+    emptyConversationGreetingTitle: 'Tôi có thể giúp gì cho bạn?',
+    emptyConversationGreeting: 'Bắt đầu bằng cách nhập tin nhắn bên dưới.'
   }
 } as const
 

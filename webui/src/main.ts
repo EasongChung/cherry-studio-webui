@@ -254,6 +254,13 @@ const App = defineComponent({
     const skipModelSwitchConfirm = ref(!!localStorage.getItem('skipModelSwitchConfirm'))
     const multiSelectMode = ref(false)
     const selectedMessageIds = ref<Set<string>>(new Set())
+    /** Per-session composer drafts, cached in localStorage and restored on selection. */
+    const composerDraftCacheKey = (conversationId: string) => `cherry-webui.composer-draft:${conversationId}`
+    /** Input history (↑/↓) across the current session; oldest first. */
+    const maxInputHistory = 50
+    const inputHistory = ref<string[]>([])
+    const inputHistoryIndex = ref(-1) // -1 = live draft; 0 = newest entry; length-1 = oldest
+    const inputHistoryDraft = ref('') // saved draft when first entering history navigation
     /** Optimistic submit keys: `${messageId}:${toolCallId}` */
     const approvalSubmittingKeys = ref<ReadonlySet<string>>(new Set())
     const approvalErrorByKey = ref<Readonly<Record<string, string>>>({})
@@ -439,6 +446,9 @@ const App = defineComponent({
       const query = input.slice(1).toLowerCase()
       return slashCommands.value.filter((command) => command.name.toLowerCase().startsWith(query)).slice(0, 6)
     })
+    const showEmptyConversationGreeting = computed(() =>
+      Boolean(selectedConversation.value && messages.value.length === 0 && messageLoadState.value === 'ready')
+    )
     const messageAuthorName = (role: WebUiRole) => {
       if (role === 'user') return userName.value || role
       if (role === 'assistant') return selectedAgentName.value || role
@@ -3145,10 +3155,95 @@ const App = defineComponent({
         }))
       )
 
+    const saveComposerDraft = () => {
+      const conversationId = selectedConversationId.value
+      if (!conversationId) return
+      try {
+        const key = composerDraftCacheKey(conversationId)
+        if (composerText.value.trim()) {
+          window.localStorage.setItem(key, composerText.value)
+        } else {
+          window.localStorage.removeItem(key)
+        }
+      } catch {
+        // localStorage may be unavailable; silently skip persistence.
+      }
+    }
+    const loadComposerDraft = (conversationId: string) => {
+      try {
+        composerText.value = window.localStorage.getItem(composerDraftCacheKey(conversationId)) ?? ''
+      } catch {
+        composerText.value = ''
+      }
+    }
+    const pushInputHistory = (text: string) => {
+      const trimmed = text.trim()
+      if (!trimmed) return
+      const next = inputHistory.value.indexOf(trimmed) === -1 ? [...inputHistory.value, trimmed] : inputHistory.value
+      inputHistory.value = next.slice(-maxInputHistory)
+      inputHistoryIndex.value = -1
+      inputHistoryDraft.value = ''
+    }
+    const navigateInputHistory = (direction: -1 | 1) => {
+      const history = inputHistory.value
+      const length = history.length
+      if (!length) return
+      if (direction === -1) {
+        // ArrowUp: step toward older entries.
+        if (inputHistoryIndex.value === -1) {
+          inputHistoryDraft.value = composerText.value
+          inputHistoryIndex.value = 0
+        } else if (inputHistoryIndex.value < length - 1) {
+          inputHistoryIndex.value += 1
+        } else {
+          return
+        }
+        composerText.value = history[inputHistoryIndex.value] ?? ''
+      } else {
+        // ArrowDown: step back toward the newest entry, then restore the draft.
+        if (inputHistoryIndex.value === -1) return
+        if (inputHistoryIndex.value > 0) {
+          inputHistoryIndex.value -= 1
+          composerText.value = history[inputHistoryIndex.value] ?? ''
+        } else {
+          inputHistoryIndex.value = -1
+          composerText.value = inputHistoryDraft.value
+        }
+      }
+    }
+    const insertQuotedMessage = (message: WebUiMessageSnapshot) => {
+      if (!message.content) return
+      const quoted = message.content
+        .split('\n')
+        .map((line) => `> ${line}`)
+        .join('\n')
+      composerText.value = composerText.value ? `${quoted}\n\n${composerText.value}` : quoted
+      saveComposerDraft()
+      void nextTick(() => {
+        const textarea = composerTextarea.value
+        if (!textarea) return
+        textarea.focus()
+        const position = textarea.value.length
+        textarea.setSelectionRange(position, position)
+      })
+    }
+
     const submitMessage = async (options?: { force?: boolean }) => {
       const conversationId = selectedConversationId.value
       const messageText = composerText.value.trim()
       if (!conversationId || (!messageText && attachments.value.length === 0) || pendingToolApproval.value) return
+
+      const finalizeSubmittedMessage = () => {
+        pushInputHistory(messageText)
+        composerText.value = ''
+        attachments.value = []
+        // The draft is consumed on send; drop the persisted copy for this session.
+        try {
+          window.localStorage.removeItem(composerDraftCacheKey(conversationId))
+        } catch {
+          // ignore
+        }
+      }
 
       // If assistant is currently streaming and not forced, queue the message instead of POSTing.
       if (activeRunConversationId.value === conversationId && !options?.force) {
@@ -3156,8 +3251,7 @@ const App = defineComponent({
           ...queuedFollowups.value,
           { id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, text: messageText }
         ]
-        composerText.value = ''
-        attachments.value = []
+        finalizeSubmittedMessage()
         return
       }
 
@@ -3175,8 +3269,7 @@ const App = defineComponent({
           attachments: sendAttachments,
           reasoningEffort: reasoningEffort.value
         })
-        composerText.value = ''
-        attachments.value = []
+        finalizeSubmittedMessage()
         // One-shot pin after the user bubble is visible. Stream follow after this is only while
         // the viewport stays near the bottom; scrolling up stops auto-follow for this turn.
         await waitForUserBubbleThenScrollToEnd({
@@ -3304,6 +3397,20 @@ const App = defineComponent({
 
     const renderMessageActions = (message: WebUiMessageSnapshot) =>
       h('div', { class: 'message-actions' }, [
+        message.content
+          ? h(
+              'button',
+              {
+                class: 'message-action-button',
+                type: 'button',
+                title: text('quote'),
+                'aria-label': text('quote'),
+                disabled: !selectedConversation.value,
+                onClick: () => insertQuotedMessage(message)
+              },
+              renderActionIcon('quote')
+            )
+          : undefined,
         message.content
           ? h(
               'button',
@@ -3599,8 +3706,11 @@ const App = defineComponent({
       reasoningPickerOpen.value = false
     })
 
-    watch(selectedConversationId, () => {
+    watch(selectedConversationId, (nextId, previousId) => {
       speechController.stop()
+      // Persist the current session's draft, then restore the newly-selected session's draft.
+      if (previousId) saveComposerDraft()
+      if (nextId) loadComposerDraft(nextId)
     })
 
     watch(workspaceFileSearch, (value) => {
@@ -3636,6 +3746,7 @@ const App = defineComponent({
 
     onBeforeUnmount(() => {
       clearStatusPreviewTimers()
+      saveComposerDraft()
       if (bottomWheelSettleTimer !== undefined) window.clearTimeout(bottomWheelSettleTimer)
       if (workspaceFileSearchTimer !== undefined) window.clearTimeout(workspaceFileSearchTimer)
       releaseWorkspacePreview()
@@ -4323,6 +4434,13 @@ const App = defineComponent({
                         )
                       : undefined,
                     messageLoadMessage.value ? h('p', { class: 'empty-copy' }, messageLoadMessage.value) : undefined,
+                    showEmptyConversationGreeting.value
+                      ? h('div', { class: 'conversation-greeting', role: 'status' }, [
+                          h('p', { class: 'conversation-greeting-agent' }, selectedAgentName.value || text('agent')),
+                          h('h3', { class: 'conversation-greeting-title' }, text('emptyConversationGreetingTitle')),
+                          h('p', { class: 'conversation-greeting-subtitle' }, text('emptyConversationGreeting'))
+                        ])
+                      : undefined,
                     ...messages.value.map((message) => {
                       const estimatedTokenLabel = messageEstimatedTokenLabel(message)
                       return h(
@@ -4559,11 +4677,27 @@ const App = defineComponent({
                         style: { height: `${composerHeight.value}px` },
                         onInput: (event: Event) => {
                           composerText.value = (event.target as HTMLTextAreaElement).value
+                          saveComposerDraft()
                         },
                         onKeydown: (event: KeyboardEvent) => {
                           if (event.key === 'Enter' && !event.shiftKey && !event.isComposing && !isCoarsePointer) {
                             event.preventDefault()
                             void submitMessage()
+                            return
+                          }
+                          // ↑/↓ browse input history only when the caret is at the very start/end,
+                          // preserving normal caret movement inside multi-line text.
+                          const target = event.target as HTMLTextAreaElement
+                          if (event.key === 'ArrowUp' && !event.isComposing && target.selectionStart === 0) {
+                            event.preventDefault()
+                            navigateInputHistory(-1)
+                          } else if (
+                            event.key === 'ArrowDown' &&
+                            !event.isComposing &&
+                            target.selectionStart === composerText.value.length
+                          ) {
+                            event.preventDefault()
+                            navigateInputHistory(1)
                           }
                         }
                       }),

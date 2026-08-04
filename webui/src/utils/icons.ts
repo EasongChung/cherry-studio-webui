@@ -24,6 +24,7 @@ export type ActionIconName =
   | 'back'
   | 'search'
   | 'volume'
+  | 'quote'
 
 export type AgentStatusIconName = 'pending' | 'in_progress' | 'completed' | 'error' | 'subagent' | 'artifact'
 
@@ -240,6 +241,11 @@ export const renderActionIcon = (name: ActionIconName, restore = false) => {
       h('path', { d: 'M11 5 6 9H3v6h3l5 4V5Z' }),
       h('path', { d: 'M15.5 8.5a5 5 0 0 1 0 7' }),
       h('path', { d: 'M18.5 5.5a9 9 0 0 1 0 13' })
+    ])
+  if (name === 'quote')
+    return h('svg', iconBaseProps, [
+      h('path', { d: 'M10 4c-3.3 0-6 2.3-6 6v5a2 2 0 0 0 2 2h2a2 2 0 0 0 2-2v-4a2 2 0 0 0-2-2c0-1.5.9-2.5 2-3z' }),
+      h('path', { d: 'M19 4c-3.3 0-6 2.3-6 6v5a2 2 0 0 0 2 2h2a2 2 0 0 0 2-2v-4a2 2 0 0 0-2-2c0-1.5.9-2.5 2-3z' })
     ])
   return h('svg', iconBaseProps)
 }
