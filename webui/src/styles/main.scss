@@ -2085,9 +2085,10 @@
     border-radius: 8px;
   }
 
-  /* Assistant ~desktop 800px reading column; user stays slightly narrower. */
+  /* Assistant uses the full ~800px reading column (stretch fills the row up to the cap)
+     instead of shrinking to the content width; user stays slightly narrower and right-aligned. */
   .assistant-message {
-    align-self: flex-start;
+    align-self: stretch;
     max-width: min(800px, 100%);
   }
 
