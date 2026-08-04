@@ -277,6 +277,8 @@ const App = defineComponent({
     const skipModelSwitchConfirm = ref(!!localStorage.getItem('skipModelSwitchConfirm'))
     const multiSelectMode = ref(false)
     const selectedMessageIds = ref<Set<string>>(new Set())
+    /** Assistant message whose "more" menu is currently open. */
+    const moreMenuMessageId = ref<string | null>(null)
     /** Per-session composer drafts, cached in localStorage and restored on selection. */
     const composerDraftCacheKey = (conversationId: string) => `cherry-webui.composer-draft:${conversationId}`
     /** Input history (↑/↓) across the current session; oldest first. */
@@ -3542,6 +3544,29 @@ const App = defineComponent({
       return `${tokenLabel} · ${text('estimatedTokensPerSecond').replace('{{value}}', tokensPerSecond.toFixed(1))}`
     }
 
+    const downloadMessageMarkdown = (message: WebUiMessageSnapshot, includeReasoning: boolean) => {
+      const lines: string[] = []
+      if (includeReasoning && message.reasoning) {
+        lines.push(
+          message.reasoning
+            .split('\n')
+            .map((line) => `> ${line}`)
+            .join('\n'),
+          ''
+        )
+      }
+      if (message.content) lines.push(message.content)
+      const blob = new Blob([lines.join('\n').trim()], { type: 'text/markdown;charset=utf-8' })
+      const url = URL.createObjectURL(blob)
+      const anchor = document.createElement('a')
+      anchor.href = url
+      anchor.download = `cherry-message-${message.id.slice(0, 8)}.md`
+      document.body.appendChild(anchor)
+      anchor.click()
+      anchor.remove()
+      URL.revokeObjectURL(url)
+    }
+
     const renderMessageActions = (message: WebUiMessageSnapshot) =>
       h('div', { class: 'message-actions' }, [
         message.content
@@ -3620,7 +3645,100 @@ const App = defineComponent({
             h('path', { d: 'M10 11v5' }),
             h('path', { d: 'M14 11v5' })
           ])
-        )
+        ),
+        message.role !== 'user' && message.content
+          ? h('span', { class: 'message-action-wrap' }, [
+              h(
+                'button',
+                {
+                  class: [
+                    'message-action-button',
+                    { 'message-action-button-active': moreMenuMessageId.value === message.id }
+                  ],
+                  type: 'button',
+                  title: text('moreActions'),
+                  'aria-label': text('moreActions'),
+                  'aria-expanded': moreMenuMessageId.value === message.id,
+                  'aria-haspopup': 'menu',
+                  onClick: (event: MouseEvent) => {
+                    event.stopPropagation()
+                    moreMenuMessageId.value = moreMenuMessageId.value === message.id ? null : message.id
+                  }
+                },
+                renderActionIcon('more')
+              ),
+              moreMenuMessageId.value === message.id
+                ? h('div', { class: 'message-more-menu', role: 'menu' }, [
+                    h(
+                      'button',
+                      {
+                        class: 'message-more-menu-item',
+                        type: 'button',
+                        role: 'menuitem',
+                        onClick: () => {
+                          moreMenuMessageId.value = null
+                          multiSelectMode.value = true
+                        }
+                      },
+                      [h('span', { class: 'message-more-menu-item-label' }, text('multiSelectMode'))]
+                    ),
+                    h('div', { class: 'message-more-menu-separator', role: 'separator' }),
+                    h(
+                      'button',
+                      {
+                        class: 'message-more-menu-item',
+                        type: 'button',
+                        role: 'menuitem',
+                        onClick: () => {
+                          moreMenuMessageId.value = null
+                          downloadMessageMarkdown(message, false)
+                        }
+                      },
+                      [h('span', { class: 'message-more-menu-item-label' }, text('saveMessage'))]
+                    ),
+                    h(
+                      'button',
+                      {
+                        class: 'message-more-menu-item',
+                        type: 'button',
+                        role: 'menuitem',
+                        onClick: () => {
+                          moreMenuMessageId.value = null
+                          downloadMessageMarkdown(message, false)
+                        }
+                      },
+                      [h('span', { class: 'message-more-menu-item-label' }, text('exportMarkdown'))]
+                    ),
+                    h(
+                      'button',
+                      {
+                        class: 'message-more-menu-item',
+                        type: 'button',
+                        role: 'menuitem',
+                        onClick: () => {
+                          moreMenuMessageId.value = null
+                          downloadMessageMarkdown(message, true)
+                        }
+                      },
+                      [h('span', { class: 'message-more-menu-item-label' }, text('exportMarkdownReason'))]
+                    ),
+                    h(
+                      'button',
+                      {
+                        class: 'message-more-menu-item',
+                        type: 'button',
+                        role: 'menuitem',
+                        onClick: () => {
+                          moreMenuMessageId.value = null
+                          void copyText(message.content).then(() => showCopiedHint(text('copyPlainText')))
+                        }
+                      },
+                      [h('span', { class: 'message-more-menu-item-label' }, text('copyPlainText'))]
+                    )
+                  ])
+                : undefined
+            ])
+          : undefined
       ])
 
     const renderQueuedFollowupDock = () => {
@@ -4349,23 +4467,242 @@ const App = defineComponent({
                   ),
                   h('div', { class: 'chat-header-titles' }, [
                     h('div', { class: 'eyebrow' }, [
-                      h(
-                        'span',
-                        { class: 'chat-header-workspace' },
-                        selectedConversation.value?.workspaceLabel ?? selectedAgentName.value ?? text('desktopSession')
-                      ),
-                      conversationLoadState.value === 'loading' || messageLoadState.value === 'loading'
-                        ? h(
-                            'span',
-                            { class: 'header-loading-state' },
-                            ` · ${
-                              messageLoadState.value === 'loading'
-                                ? text('loadingMessages')
-                                : text('loadingConversations')
-                            }`
-                          )
+                      // Agent / Model / Workspace selector buttons lead the header's first row.
+                      selectedConversation.value
+                        ? h('div', { class: 'chat-header-controls' }, [
+                            // Agent selector
+                            h('div', { class: 'chat-header-selector-wrap' }, [
+                              h(
+                                'button',
+                                {
+                                  class: 'chat-header-selector-button',
+                                  type: 'button',
+                                  title: `${text('switchAgent')}: ${selectedAgentName.value ?? text('selectAgent')}`,
+                                  'aria-label': text('switchAgent'),
+                                  'aria-expanded': agentPickerOpen.value,
+                                  disabled: agentUpdateState.value === 'updating',
+                                  onClick: () => {
+                                    agentPickerOpen.value = !agentPickerOpen.value
+                                    modelPickerOpen.value = false
+                                    workspacePickerOpen.value = false
+                                  }
+                                },
+                                [
+                                  h(
+                                    'span',
+                                    { class: 'chat-header-selector-label' },
+                                    selectedAgentName.value ?? text('selectAgent')
+                                  ),
+                                  h('span', { class: 'chat-header-selector-chevron' }, ' ▼')
+                                ]
+                              ),
+                              agentPickerOpen.value
+                                ? h(
+                                    'div',
+                                    { class: 'chat-header-picker-menu', role: 'listbox' },
+                                    agents.value.map((agent) =>
+                                      h(
+                                        'button',
+                                        {
+                                          class: [
+                                            'chat-header-picker-option',
+                                            {
+                                              'chat-header-picker-option-selected':
+                                                agent.id === selectedConversation.value?.agentId
+                                            }
+                                          ],
+                                          key: agent.id,
+                                          type: 'button',
+                                          role: 'option',
+                                          'aria-selected': agent.id === selectedConversation.value?.agentId,
+                                          onClick: () => void updateSessionAgent(agent.id)
+                                        },
+                                        [
+                                          h('span', { class: 'chat-header-picker-option-name' }, agent.name),
+                                          agent.model
+                                            ? h('span', { class: 'chat-header-picker-option-detail' }, agent.model)
+                                            : undefined
+                                        ]
+                                      )
+                                    )
+                                  )
+                                : undefined
+                            ]),
+                            // Model selector
+                            h('div', { class: 'chat-header-selector-wrap' }, [
+                              h(
+                                'button',
+                                {
+                                  class: 'chat-header-selector-button',
+                                  type: 'button',
+                                  title: `${selectedAgentName.value ?? ''}: ${modelPickerLabel.value}`,
+                                  'aria-label': text('model'),
+                                  'aria-expanded': modelPickerOpen.value,
+                                  disabled: !models.value.length || modelUpdateState.value === 'updating',
+                                  onClick: () => {
+                                    modelPickerOpen.value = !modelPickerOpen.value
+                                    agentPickerOpen.value = false
+                                    workspacePickerOpen.value = false
+                                  }
+                                },
+                                [
+                                  h(
+                                    'span',
+                                    { class: 'chat-header-selector-label' },
+                                    modelUpdateState.value === 'updating' ? text('generating') : modelPickerLabel.value
+                                  ),
+                                  h('span', { class: 'chat-header-selector-chevron' }, ' ▼')
+                                ]
+                              ),
+                              modelPickerOpen.value
+                                ? h(
+                                    'div',
+                                    { class: 'chat-header-picker-menu', role: 'listbox' },
+                                    modelGroups.value.flatMap((group) => [
+                                      h('p', { class: 'model-picker-group', key: `group-${group.id}` }, group.name),
+                                      ...group.models.map((model) =>
+                                        h(
+                                          'button',
+                                          {
+                                            class: [
+                                              'model-picker-option',
+                                              {
+                                                'model-picker-option-selected': model.id === selectedAgent.value?.model
+                                              }
+                                            ],
+                                            key: model.id,
+                                            type: 'button',
+                                            role: 'option',
+                                            'aria-selected': model.id === selectedAgent.value?.model,
+                                            onClick: () => {
+                                              if (model.id === selectedAgent.value?.model) return
+                                              if (messages.value.length > 0 && !skipModelSwitchConfirm.value) {
+                                                pendingModelSwitchTarget.value = model
+                                                modelPickerOpen.value = false
+                                                return
+                                              }
+                                              void updateSessionModel(model)
+                                            }
+                                          },
+                                          [
+                                            h('span', { class: 'model-picker-name' }, model.name),
+                                            h(
+                                              'span',
+                                              { class: 'model-picker-provider' },
+                                              model.group ?? model.providerId
+                                            )
+                                          ]
+                                        )
+                                      )
+                                    ])
+                                  )
+                                : undefined
+                            ]),
+                            // Workspace selector
+                            h('div', { class: 'chat-header-selector-wrap' }, [
+                              h(
+                                'button',
+                                {
+                                  class: 'chat-header-selector-button',
+                                  type: 'button',
+                                  title: text('workspace'),
+                                  'aria-label': text('workspace'),
+                                  'aria-expanded': workspacePickerOpen.value,
+                                  disabled: workspaceUpdateState.value === 'updating',
+                                  onClick: () => {
+                                    workspacePickerOpen.value = !workspacePickerOpen.value
+                                    if (workspacePickerOpen.value && !workspaces.value.length) {
+                                      void loadWorkspaces()
+                                    }
+                                    agentPickerOpen.value = false
+                                    modelPickerOpen.value = false
+                                  }
+                                },
+                                [
+                                  h(
+                                    'span',
+                                    { class: 'chat-header-selector-label' },
+                                    selectedConversation.value?.workspaceLabel ?? text('workspace')
+                                  ),
+                                  h('span', { class: 'chat-header-selector-chevron' }, ' ▼')
+                                ]
+                              ),
+                              workspacePickerOpen.value
+                                ? h(
+                                    'div',
+                                    { class: 'chat-header-picker-menu', role: 'listbox' },
+                                    workspacesLoading.value
+                                      ? [
+                                          h(
+                                            'p',
+                                            { class: 'chat-header-picker-placeholder' },
+                                            text('loadingConversations')
+                                          )
+                                        ]
+                                      : workspaces.value.length
+                                        ? [
+                                            // System workspace (no specific project)
+                                            h(
+                                              'button',
+                                              {
+                                                class: [
+                                                  'chat-header-picker-option',
+                                                  {
+                                                    'chat-header-picker-option-selected':
+                                                      !selectedConversation.value?.workspaceId
+                                                  }
+                                                ],
+                                                key: '__system__',
+                                                type: 'button',
+                                                role: 'option',
+                                                'aria-selected': !selectedConversation.value?.workspaceId,
+                                                onClick: () => void updateSessionWorkspace(null)
+                                              },
+                                              [
+                                                h(
+                                                  'span',
+                                                  { class: 'chat-header-picker-option-name' },
+                                                  text('noProject')
+                                                )
+                                              ]
+                                            ),
+                                            ...workspaces.value.map((ws) =>
+                                              h(
+                                                'button',
+                                                {
+                                                  class: [
+                                                    'chat-header-picker-option',
+                                                    {
+                                                      'chat-header-picker-option-selected':
+                                                        ws.id === selectedConversation.value?.workspaceId
+                                                    }
+                                                  ],
+                                                  key: ws.id,
+                                                  type: 'button',
+                                                  role: 'option',
+                                                  'aria-selected': ws.id === selectedConversation.value?.workspaceId,
+                                                  onClick: () => void updateSessionWorkspace(ws.id)
+                                                },
+                                                [
+                                                  h('span', { class: 'chat-header-picker-option-name' }, ws.name),
+                                                  h('span', { class: 'chat-header-picker-option-detail' }, ws.path)
+                                                ]
+                                              )
+                                            )
+                                          ]
+                                        : [
+                                            h(
+                                              'p',
+                                              { class: 'chat-header-picker-placeholder' },
+                                              text('workspaceSelectPlaceholder')
+                                            )
+                                          ]
+                                  )
+                                : undefined
+                            ])
+                          ])
                         : undefined,
-                      // Composer/send/model errors surface beside the workspace label (not under the input).
+                      // Composer/send/model errors surface right after the selector group (not under the input).
                       submitError.value
                         ? h(
                             'span',
@@ -4377,137 +4714,21 @@ const App = defineComponent({
                             ` · ${submitError.value}`
                           )
                         : undefined,
-                      // Agent / Model / Workspace selector buttons on the header first row.
-                      selectedConversation.value
-                        ? h('div', { class: 'chat-header-controls' }, [
-                            // Agent selector
-                            h(
-                              'button',
-                              {
-                                class: 'chat-header-selector-button',
-                                type: 'button',
-                                title: `${text('switchAgent')}: ${selectedAgentName.value ?? text('selectAgent')}`,
-                                'aria-label': text('switchAgent'),
-                                'aria-expanded': agentPickerOpen.value,
-                                disabled: agentUpdateState.value === 'updating',
-                                onClick: () => {
-                                  agentPickerOpen.value = !agentPickerOpen.value
-                                  modelPickerOpen.value = false
-                                  workspacePickerOpen.value = false
-                                }
-                              },
-                              [
-                                h(
-                                  'span',
-                                  { class: 'chat-header-selector-label' },
-                                  selectedAgentName.value ?? text('selectAgent')
-                                ),
-                                h('span', { class: 'chat-header-selector-chevron' }, ' ▼')
-                              ]
-                            ),
-                            // Model selector
-                            h(
-                              'button',
-                              {
-                                class: 'chat-header-selector-button',
-                                type: 'button',
-                                title: `${selectedAgentName.value ?? ''}: ${modelPickerLabel.value}`,
-                                'aria-label': text('model'),
-                                'aria-expanded': modelPickerOpen.value,
-                                disabled: !models.value.length || modelUpdateState.value === 'updating',
-                                onClick: () => {
-                                  modelPickerOpen.value = !modelPickerOpen.value
-                                  agentPickerOpen.value = false
-                                  workspacePickerOpen.value = false
-                                }
-                              },
-                              [
-                                h(
-                                  'span',
-                                  { class: 'chat-header-selector-label' },
-                                  modelUpdateState.value === 'updating' ? text('generating') : modelPickerLabel.value
-                                ),
-                                h('span', { class: 'chat-header-selector-chevron' }, ' ▼')
-                              ]
-                            ),
-                            // Workspace selector
-                            h(
-                              'button',
-                              {
-                                class: 'chat-header-selector-button',
-                                type: 'button',
-                                title: text('workspace'),
-                                'aria-label': text('workspace'),
-                                'aria-expanded': workspacePickerOpen.value,
-                                disabled: workspaceUpdateState.value === 'updating',
-                                onClick: () => {
-                                  workspacePickerOpen.value = !workspacePickerOpen.value
-                                  if (workspacePickerOpen.value && !workspaces.value.length) {
-                                    void loadWorkspaces()
-                                  }
-                                  agentPickerOpen.value = false
-                                  modelPickerOpen.value = false
-                                }
-                              },
-                              [
-                                h(
-                                  'span',
-                                  { class: 'chat-header-selector-label' },
-                                  selectedConversation.value?.workspaceLabel ?? text('workspace')
-                                ),
-                                h('span', { class: 'chat-header-selector-chevron' }, ' ▼')
-                              ]
-                            ),
-                            // Multi-select mode toggle
-                            h(
-                              'button',
-                              {
-                                class: [
-                                  'chat-header-selector-button',
-                                  { 'chat-header-selector-button-active': multiSelectMode.value }
-                                ],
-                                type: 'button',
-                                title: text('multiSelectMode'),
-                                'aria-label': text('multiSelectMode'),
-                                'aria-pressed': multiSelectMode.value,
-                                onClick: () => {
-                                  multiSelectMode.value = !multiSelectMode.value
-                                  if (!multiSelectMode.value) {
-                                    selectedMessageIds.value = new Set()
-                                  }
-                                }
-                              },
-                              [h('span', { class: 'chat-header-selector-label' }, text('multiSelectMode'))]
-                            )
-                          ])
+                      conversationLoadState.value === 'loading' || messageLoadState.value === 'loading'
+                        ? h(
+                            'span',
+                            { class: 'header-loading-state' },
+                            ` · ${
+                              messageLoadState.value === 'loading'
+                                ? text('loadingMessages')
+                                : text('loadingConversations')
+                            }`
+                          )
                         : undefined
                     ]),
                     h('h2', selectedConversation.value?.title ?? text('selectConversation'))
                   ]),
                   h('div', { class: 'mobile-chat-actions' }, [
-                    h(
-                      'button',
-                      {
-                        class: [
-                          'agent-status-shortcut',
-                          'workspace-files-shortcut',
-                          { 'agent-status-shortcut-active': statusPanelOpen.value && rightPanelTab.value === 'files' }
-                        ],
-                        type: 'button',
-                        disabled: !selectedConversation.value,
-                        title: text('files'),
-                        'aria-label': text('files'),
-                        'aria-expanded': statusPanelOpen.value && rightPanelTab.value === 'files',
-                        onClick: () => {
-                          if (statusPanelOpen.value && rightPanelTab.value === 'files') {
-                            statusPanelOpen.value = false
-                            return
-                          }
-                          openFilesPanel()
-                        }
-                      },
-                      renderActionIcon('folder')
-                    ),
                     h(
                       'div',
                       {
@@ -4563,6 +4784,9 @@ const App = defineComponent({
                     ref: messageStack,
                     onScroll: updateMessageScrollState,
                     onWheel: handleMessageStackWheel,
+                    onClick: () => {
+                      if (moreMenuMessageId.value) moreMenuMessageId.value = null
+                    },
                     onTouchstart: handleMessageStackTouchStart,
                     onTouchmove: handleMessageStackTouchMove,
                     onTouchend: handleMessageStackTouchEnd
@@ -5121,134 +5345,6 @@ const App = defineComponent({
                                 )
                               )
                             )
-                          )
-                        : undefined,
-                      modelPickerOpen.value
-                        ? h(
-                            'div',
-                            { class: 'model-picker-menu', role: 'listbox' },
-                            modelGroups.value.flatMap((group) => [
-                              h('p', { class: 'model-picker-group', key: `group-${group.id}` }, group.name),
-                              ...group.models.map((model) =>
-                                h(
-                                  'button',
-                                  {
-                                    class: [
-                                      'model-picker-option',
-                                      { 'model-picker-option-selected': model.id === selectedAgent.value?.model }
-                                    ],
-                                    key: model.id,
-                                    type: 'button',
-                                    role: 'option',
-                                    'aria-selected': model.id === selectedAgent.value?.model,
-                                    onClick: () => {
-                                      if (model.id === selectedAgent.value?.model) return
-                                      if (messages.value.length > 0 && !skipModelSwitchConfirm.value) {
-                                        pendingModelSwitchTarget.value = model
-                                        modelPickerOpen.value = false
-                                        return
-                                      }
-                                      void updateSessionModel(model)
-                                    }
-                                  },
-                                  [
-                                    h('span', { class: 'model-picker-name' }, model.name),
-                                    h('span', { class: 'model-picker-provider' }, model.group ?? model.providerId)
-                                  ]
-                                )
-                              )
-                            ])
-                          )
-                        : undefined,
-                      agentPickerOpen.value
-                        ? h(
-                            'div',
-                            { class: 'chat-header-picker-menu', role: 'listbox' },
-                            agents.value.map((agent) =>
-                              h(
-                                'button',
-                                {
-                                  class: [
-                                    'chat-header-picker-option',
-                                    {
-                                      'chat-header-picker-option-selected':
-                                        agent.id === selectedConversation.value?.agentId
-                                    }
-                                  ],
-                                  key: agent.id,
-                                  type: 'button',
-                                  role: 'option',
-                                  'aria-selected': agent.id === selectedConversation.value?.agentId,
-                                  onClick: () => void updateSessionAgent(agent.id)
-                                },
-                                [
-                                  h('span', { class: 'chat-header-picker-option-name' }, agent.name),
-                                  agent.model
-                                    ? h('span', { class: 'chat-header-picker-option-detail' }, agent.model)
-                                    : undefined
-                                ]
-                              )
-                            )
-                          )
-                        : undefined,
-                      workspacePickerOpen.value
-                        ? h(
-                            'div',
-                            { class: 'chat-header-picker-menu', role: 'listbox' },
-                            workspacesLoading.value
-                              ? [h('p', { class: 'chat-header-picker-placeholder' }, text('loadingConversations'))]
-                              : workspaces.value.length
-                                ? [
-                                    // System workspace (no specific project)
-                                    h(
-                                      'button',
-                                      {
-                                        class: [
-                                          'chat-header-picker-option',
-                                          {
-                                            'chat-header-picker-option-selected':
-                                              !selectedConversation.value?.workspaceId
-                                          }
-                                        ],
-                                        key: '__system__',
-                                        type: 'button',
-                                        role: 'option',
-                                        'aria-selected': !selectedConversation.value?.workspaceId,
-                                        onClick: () => void updateSessionWorkspace(null)
-                                      },
-                                      [h('span', { class: 'chat-header-picker-option-name' }, text('noProject'))]
-                                    ),
-                                    ...workspaces.value.map((ws) =>
-                                      h(
-                                        'button',
-                                        {
-                                          class: [
-                                            'chat-header-picker-option',
-                                            {
-                                              'chat-header-picker-option-selected':
-                                                ws.id === selectedConversation.value?.workspaceId
-                                            }
-                                          ],
-                                          key: ws.id,
-                                          type: 'button',
-                                          role: 'option',
-                                          'aria-selected': ws.id === selectedConversation.value?.workspaceId,
-                                          onClick: () => void updateSessionWorkspace(ws.id)
-                                        },
-                                        [
-                                          h('span', { class: 'chat-header-picker-option-name' }, ws.name),
-                                          h('span', { class: 'chat-header-picker-option-detail' }, ws.path)
-                                        ]
-                                      )
-                                    )
-                                  ]
-                                : [
-                                    h(
-                                      'p',
-                                      { class: 'chat-header-picker-placeholder' },
-                                      text('workspaceSelectPlaceholder')
-                                    )
-                                  ]
                           )
                         : undefined,
                       permissionModePickerOpen.value

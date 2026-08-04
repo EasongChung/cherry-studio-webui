@@ -808,14 +808,6 @@
     overflow: hidden;
   }
 
-  .chat-header-workspace {
-    flex: 0 1 auto;
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
   .chat-header-status-alert {
     flex: 1 1 auto;
     min-width: 0;
@@ -842,6 +834,10 @@
     align-items: center;
     flex: 0 0 auto;
     margin-left: 6px;
+  }
+
+  .chat-header-selector-wrap {
+    position: relative;
   }
 
   .chat-header-selector-button {
@@ -888,10 +884,11 @@
 
   .chat-header-picker-menu {
     position: absolute;
-    z-index: 6;
-    bottom: 56px;
-    left: 8px;
-    width: min(280px, calc(100% - 16px));
+    z-index: 30;
+    top: calc(100% + 6px);
+    left: 0;
+    min-width: 200px;
+    max-width: min(360px, calc(100vw - 32px));
     display: grid;
     max-height: min(276px, 42dvh);
     overflow-y: auto;
@@ -900,8 +897,8 @@
     border: 1px solid #dbe1ea;
     border-radius: 12px;
     box-shadow: 0 12px 32px rgb(15 23 42 / 14%);
-    transform-origin: bottom left;
-    animation: model-drawer-up 140ms ease-out;
+    transform-origin: top left;
+    animation: model-drawer-down 140ms ease-out;
   }
 
   .chat-header-picker-option {
@@ -2173,6 +2170,55 @@
     position: relative;
     display: inline-grid;
     place-items: center;
+  }
+
+  .message-more-menu {
+    position: absolute;
+    z-index: 40;
+    right: 0;
+    bottom: calc(100% + 6px);
+    display: grid;
+    min-width: 200px;
+    padding: 6px;
+    background: #ffffff;
+    border: 1px solid #dbe1ea;
+    border-radius: 12px;
+    box-shadow: 0 12px 32px rgb(15 23 42 / 14%);
+    transform-origin: bottom right;
+    animation: model-drawer-up 140ms ease-out;
+  }
+
+  .message-more-menu-item {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    width: 100%;
+    padding: 7px 10px;
+    color: #1f2937;
+    font-size: 13px;
+    line-height: 1.3;
+    text-align: left;
+    background: transparent;
+    border: 0;
+    border-radius: 8px;
+    cursor: pointer;
+  }
+
+  .message-more-menu-item:hover,
+  .message-more-menu-item:focus-visible {
+    background: #f1f5f9;
+  }
+
+  .message-more-menu-item-label {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .message-more-menu-separator {
+    height: 1px;
+    margin: 4px 6px;
+    background: #e5e7eb;
   }
 
   .message-action-button,
@@ -3839,16 +3885,6 @@
     box-shadow: 0 12px 32px rgb(15 23 42 / 14%);
   }
 
-  .model-picker-menu {
-    right: auto;
-    bottom: 56px;
-    left: 112px;
-    width: min(460px, calc(100% - 128px));
-    max-height: min(360px, 48dvh);
-    transform-origin: bottom left;
-    animation: model-drawer-up 140ms ease-out;
-  }
-
   .reasoning-picker-menu {
     z-index: 7;
     right: auto;
@@ -3908,6 +3944,18 @@
     from {
       opacity: 0;
       transform: translateY(8px) scale(0.98);
+    }
+
+    to {
+      opacity: 1;
+      transform: translateY(0) scale(1);
+    }
+  }
+
+  @keyframes model-drawer-down {
+    from {
+      opacity: 0;
+      transform: translateY(-8px) scale(0.98);
     }
 
     to {
@@ -4797,6 +4845,8 @@
   :root[data-webui-theme='dark'] .permission-mode-picker-menu,
   :root[data-webui-theme='dark'] .skill-picker-menu,
   :root[data-webui-theme='dark'] .kb-picker-menu,
+  :root[data-webui-theme='dark'] .message-more-menu,
+  :root[data-webui-theme='dark'] .message-more-menu-item,
   :root[data-webui-theme='dark'] .scroll-bottom-button,
   :root[data-webui-theme='dark'] .theme-toggle-button,
   :root[data-webui-theme='dark'] .panel-icon-button,
@@ -4805,6 +4855,10 @@
     color: #e5e7eb;
     background: #273449;
     border-color: #475569;
+  }
+
+  :root[data-webui-theme='dark'] .message-more-menu-separator {
+    background: #475569;
   }
 
   :root[data-webui-theme='dark'] .markdown-content table {
@@ -4855,6 +4909,8 @@
   :root[data-webui-theme='dark'] .kb-result-option:focus-visible,
   :root[data-webui-theme='dark'] .kb-base-option:hover,
   :root[data-webui-theme='dark'] .kb-base-option-selected,
+  :root[data-webui-theme='dark'] .message-more-menu-item:hover,
+  :root[data-webui-theme='dark'] .message-more-menu-item:focus-visible,
   :root[data-webui-theme='dark'] .slash-command-option:hover,
   :root[data-webui-theme='dark'] .theme-toggle-button:hover {
     background: #334155;
