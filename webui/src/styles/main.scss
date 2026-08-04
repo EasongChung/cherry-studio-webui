@@ -2662,6 +2662,25 @@
     white-space: nowrap;
   }
 
+  /* Rolling reasoning sliver — while streaming, the newest thoughts scroll by in the collapsed summary row. */
+  .process-preview-sliver {
+    flex: 1 1 0;
+    min-width: 0;
+    overflow-x: auto;
+    overflow-y: hidden;
+    color: #6b7280;
+    font-size: 12px;
+    line-height: 1.45;
+    white-space: nowrap;
+    scrollbar-width: none;
+    mask-image: linear-gradient(to right, transparent, black 28px);
+    -webkit-mask-image: linear-gradient(to right, transparent, black 28px);
+  }
+
+  .process-preview-sliver::-webkit-scrollbar {
+    display: none;
+  }
+
   .process-section {
     padding: 10px 12px;
   }
@@ -4857,6 +4876,10 @@
     border-color: #475569;
   }
 
+  :root[data-webui-theme='dark'] .process-preview-sliver {
+    color: #94a3b8;
+  }
+
   :root[data-webui-theme='dark'] .message-more-menu-separator {
     background: #475569;
   }
@@ -5374,6 +5397,10 @@
     color: #1f2937;
     background: #ffffff;
     border-color: #d1d5db;
+  }
+
+  :root[data-webui-theme='light'] .process-preview-sliver {
+    color: #6b7280;
   }
 
   :root[data-webui-theme='light'] .conversation-item:hover,

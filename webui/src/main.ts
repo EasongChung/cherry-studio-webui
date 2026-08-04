@@ -188,6 +188,12 @@ const App = defineComponent({
     }
     const rememberVerify = ref<RememberVerifyOption>('off')
     const showEstimatedTokens = ref(false)
+    /** Mirrors desktop `chat.message.thought.auto_collapse` — thinking stays folded while streaming when enabled. */
+    const thoughtAutoCollapse = ref(true)
+    /** Points at the rolling reasoning sliver of the currently-streaming message, for `scrollLeft` updates. */
+    const activeThinkingPreview = ref<HTMLElement | null>(null)
+    /** Per-message user open/close intent for the process block, overriding auto-open from the preference. */
+    const processOpenOverrides = ref<Map<string, boolean>>(new Map())
     const userName = ref('')
     const bridgeDetail = ref('')
     const appVersion = ref('')
@@ -989,47 +995,85 @@ const App = defineComponent({
       })
     }
 
-    const renderProcessDetails = (message: WebUiMessageSnapshot) =>
-      hasProcessDetails(message)
-        ? h('details', { class: ['process-block', { 'process-block-pending': message.status === 'pending' }] }, [
-            h('summary', [
+    const renderProcessDetails = (message: WebUiMessageSnapshot) => {
+      if (!hasProcessDetails(message)) return undefined
+
+      const isThinking = message.status === 'pending'
+      const previewText = isThinking ? (message.reasoning ?? '').replace(/\s+/g, ' ').trim() : ''
+      const showRollingPreview = isThinking && previewText.length > 0
+      const openOverride = processOpenOverrides.value.get(message.id)
+      // Strictly follow the desktop auto-collapse preference: when enabled (default), the process block
+      // stays folded while streaming and the latest reasoning sliver rolls in the summary row instead;
+      // when disabled, streaming auto-expands so reasoning/tools render live (user clicks win via override).
+      const isProcessOpen =
+        openOverride !== undefined
+          ? openOverride
+          : isThinking && !thoughtAutoCollapse.value && Boolean(message.reasoning)
+
+      return h(
+        'details',
+        {
+          class: ['process-block', { 'process-block-pending': isThinking }],
+          ...(isProcessOpen ? { open: true } : {})
+        },
+        [
+          h(
+            'summary',
+            {
+              onClick: (event: MouseEvent) => {
+                const details = (event.currentTarget as HTMLElement).closest('details')
+                const next = new Map(processOpenOverrides.value)
+                next.set(message.id, !(details?.open ?? false))
+                processOpenOverrides.value = next
+              }
+            },
+            [
               h('span', { class: 'process-state-indicator', 'aria-hidden': 'true' }),
-              h('span', { class: 'process-summary' }, getProcessSummary(message))
-            ]),
-            message.reasoning
-              ? h('section', { class: 'process-section' }, [
-                  h('details', { class: 'reasoning-block' }, [
-                    h('summary', text('reasoning')),
-                    h('div', {
-                      class: 'markdown-content',
-                      onClick: handleMarkdownContentClick,
-                      innerHTML: renderMarkdown(message.reasoning, {
-                        copyCodeLabel: text('copyCode'),
-                        downloadCodeLabel: text('downloadSource'),
-                        wrapLinesLabel: text('wrapLines')
-                      })
-                    })
-                  ])
-                ])
-              : undefined,
-            message.toolCalls?.length
-              ? h('section', { class: 'process-section' }, [
-                  h('p', { class: 'process-section-title' }, `${text('toolCalls')} (${message.toolCalls.length})`),
-                  ...message.toolCalls.map((tool) =>
-                    h(ToolCallBlock, {
-                      tool,
-                      message,
-                      text,
-                      submitting: isApprovalSubmitting(message.id, tool.id),
-                      approvalError: approvalErrorByKey.value[approvalKey(message.id, tool.id)],
-                      onApprove: () => void respondToolApproval(tool, message, true),
-                      onDeny: () => void respondToolApproval(tool, message, false)
-                    })
+              h('span', { class: 'process-summary' }, getProcessSummary(message)),
+              showRollingPreview
+                ? h(
+                    'span',
+                    { class: 'process-preview-sliver', 'aria-hidden': 'true', ref: activeThinkingPreview },
+                    previewText
                   )
+                : undefined
+            ]
+          ),
+          message.reasoning
+            ? h('section', { class: 'process-section' }, [
+                h('details', { class: 'reasoning-block' }, [
+                  h('summary', text('reasoning')),
+                  h('div', {
+                    class: 'markdown-content',
+                    onClick: handleMarkdownContentClick,
+                    innerHTML: renderMarkdown(message.reasoning, {
+                      copyCodeLabel: text('copyCode'),
+                      downloadCodeLabel: text('downloadSource'),
+                      wrapLinesLabel: text('wrapLines')
+                    })
+                  })
                 ])
-              : undefined
-          ])
-        : undefined
+              ])
+            : undefined,
+          message.toolCalls?.length
+            ? h('section', { class: 'process-section' }, [
+                h('p', { class: 'process-section-title' }, `${text('toolCalls')} (${message.toolCalls.length})`),
+                ...message.toolCalls.map((tool) =>
+                  h(ToolCallBlock, {
+                    tool,
+                    message,
+                    text,
+                    submitting: isApprovalSubmitting(message.id, tool.id),
+                    approvalError: approvalErrorByKey.value[approvalKey(message.id, tool.id)],
+                    onApprove: () => void respondToolApproval(tool, message, true),
+                    onDeny: () => void respondToolApproval(tool, message, false)
+                  })
+                )
+              ])
+            : undefined
+        ]
+      )
+    }
 
     const workspaceApiPath = (route: 'files' | 'file' | 'preview', requestPath = '', search = '') => {
       const conversationId = selectedConversationId.value
@@ -2826,6 +2870,13 @@ const App = defineComponent({
       }, 180)
     }
 
+    const scrollThinkingPreview = () => {
+      void nextTick(() => {
+        const el = activeThinkingPreview.value
+        if (el) el.scrollLeft = el.scrollWidth
+      })
+    }
+
     const applyStreamChunk = (payload: WebUiChunkPayload): boolean => {
       if (payload.conversationId !== selectedConversationId.value) return true
 
@@ -2852,6 +2903,7 @@ const App = defineComponent({
         const previousReasoning = message.reasoning ?? ''
         if (previousReasoning.endsWith(chunk.delta)) return true
         nextMessages[messageIndex] = { ...message, reasoning: `${previousReasoning}${chunk.delta}` }
+        scrollThinkingPreview()
       } else if (chunk.type === 'data-agent-task-event' && isWebUiAgentTaskEventData(chunk.data)) {
         const statusEvent: WebUiAgentStatusEvent = {
           kind: 'task-event',
@@ -3835,8 +3887,10 @@ const App = defineComponent({
       try {
         const preferences = await httpClient.getJson<WebUiPreferencesResponse>('/api/webui/preferences')
         showEstimatedTokens.value = preferences.showEstimatedTokens
+        thoughtAutoCollapse.value = preferences.thoughtAutoCollapse ?? true
       } catch {
         showEstimatedTokens.value = false
+        thoughtAutoCollapse.value = true
       }
     }
 

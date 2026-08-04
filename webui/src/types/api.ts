@@ -195,6 +195,8 @@ export type WebUiPermissionModeResponse = {
 
 export type WebUiPreferencesResponse = {
   readonly showEstimatedTokens: boolean
+  /** Mirrors desktop `chat.message.thought.auto_collapse` — keeps WebUI thinking blocks folded on stream. */
+  readonly thoughtAutoCollapse: boolean
 }
 
 export type WebUiSseEventName = 'ready' | 'chunk' | 'sync' | 'error' | 'done'

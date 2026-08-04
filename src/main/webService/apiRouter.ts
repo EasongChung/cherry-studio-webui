@@ -802,7 +802,8 @@ export const createWebUiApiRouter = ({
       return {
         status: 200,
         body: {
-          showEstimatedTokens: Boolean(application.get('PreferenceService').get('chat.input.show_estimated_tokens'))
+          showEstimatedTokens: Boolean(application.get('PreferenceService').get('chat.input.show_estimated_tokens')),
+          thoughtAutoCollapse: Boolean(application.get('PreferenceService').get('chat.message.thought.auto_collapse'))
         }
       }
     }
