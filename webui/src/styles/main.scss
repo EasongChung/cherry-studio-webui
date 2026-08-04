@@ -4880,6 +4880,14 @@
     color: #94a3b8;
   }
 
+  :root[data-webui-theme='dark'] .mobile-header-picker-group-title {
+    color: #94a3b8;
+  }
+
+  :root[data-webui-theme='dark'] .mobile-header-picker-group + .mobile-header-picker-group {
+    border-top-color: #475569;
+  }
+
   :root[data-webui-theme='dark'] .message-more-menu-separator {
     background: #475569;
   }
@@ -5712,6 +5720,32 @@
     /* Larger touch targets on phone-sized screens; keep the header grid in sync. */
     .chat-header {
       grid-template-columns: 40px minmax(0, 1fr) auto;
+    }
+
+    /* Compact mobile header: one Agent trigger opens a grouped Agent/Model/Workspace menu. */
+    .mobile-header-selector-button {
+      min-height: 32px;
+    }
+
+    .mobile-header-picker-menu {
+      right: 0;
+      left: auto;
+      width: min(280px, calc(100vw - 24px));
+      max-height: min(320px, 44dvh);
+    }
+
+    .mobile-header-picker-group + .mobile-header-picker-group {
+      margin-top: 6px;
+      padding-top: 6px;
+      border-top: 1px solid #d1d5db;
+    }
+
+    .mobile-header-picker-group-title {
+      margin: 2px 10px 4px;
+      color: #6b7280;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.02em;
     }
 
     .mobile-sidebar-button,
