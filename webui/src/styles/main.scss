@@ -802,6 +802,259 @@
     white-space: nowrap;
   }
 
+  .chat-header-controls {
+    display: inline-flex;
+    gap: 4px;
+    align-items: center;
+    flex: 0 0 auto;
+    margin-left: 6px;
+  }
+
+  .chat-header-selector-button {
+    display: inline-flex;
+    gap: 2px;
+    align-items: center;
+    min-width: 0;
+    max-width: 160px;
+    padding: 1px 8px;
+    overflow: hidden;
+    color: #475569;
+    font-size: 11px;
+    line-height: 20px;
+    text-align: left;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    background: #f1f5f9;
+    border: 0;
+    border-radius: 12px;
+    cursor: pointer;
+  }
+
+  .chat-header-selector-button:hover,
+  .chat-header-selector-button:focus-visible {
+    background: #e2e8f0;
+  }
+
+  .chat-header-selector-button:disabled {
+    opacity: 0.5;
+    cursor: default;
+  }
+
+  .chat-header-selector-label {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .chat-header-selector-chevron {
+    flex: 0 0 auto;
+    font-size: 8px;
+    opacity: 0.6;
+  }
+
+  .chat-header-picker-menu {
+    position: absolute;
+    z-index: 6;
+    bottom: 56px;
+    left: 8px;
+    width: min(280px, calc(100% - 16px));
+    display: grid;
+    max-height: min(276px, 42dvh);
+    overflow-y: auto;
+    padding: 6px;
+    background: #ffffff;
+    border: 1px solid #dbe1ea;
+    border-radius: 12px;
+    box-shadow: 0 12px 32px rgb(15 23 42 / 14%);
+    transform-origin: bottom left;
+    animation: model-drawer-up 140ms ease-out;
+  }
+
+  .chat-header-picker-option {
+    display: grid;
+    gap: 2px;
+    width: 100%;
+    padding: 8px 10px;
+    color: #1f2937;
+    font-size: 13px;
+    line-height: 1.3;
+    text-align: left;
+    background: transparent;
+    border: 0;
+    border-radius: 8px;
+    cursor: pointer;
+  }
+
+  .chat-header-picker-option:hover,
+  .chat-header-picker-option:focus-visible {
+    background: #f1f5f9;
+  }
+
+  .chat-header-picker-option-selected {
+    color: #4f46e5;
+    font-weight: 600;
+  }
+
+  .chat-header-picker-option-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .chat-header-picker-option-detail {
+    overflow: hidden;
+    color: #64748b;
+    font-size: 11px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .chat-header-picker-placeholder {
+    margin: 8px 10px;
+    color: #94a3b8;
+    font-size: 12px;
+  }
+
+  .model-switch-confirm-dialog {
+    position: absolute;
+    z-index: 8;
+    right: 8px;
+    bottom: calc(100% + 120px);
+    width: clamp(260px, 40%, 360px);
+    display: grid;
+    gap: 10px;
+    padding: 16px;
+    background: #ffffff;
+    border: 1px solid #dbe1ea;
+    border-radius: 12px;
+    box-shadow: 0 12px 32px rgb(15 23 42 / 14%);
+  }
+
+  .model-switch-confirm-title {
+    margin: 0;
+    font-size: 14px;
+    font-weight: 600;
+  }
+
+  .model-switch-confirm-description {
+    margin: 0;
+    color: #64748b;
+    font-size: 13px;
+    line-height: 1.4;
+  }
+
+  .model-switch-confirm-skip {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+    font-size: 12px;
+    color: #475569;
+    cursor: pointer;
+  }
+
+  .model-switch-confirm-skip input {
+    width: 14px;
+    height: 14px;
+    cursor: pointer;
+  }
+
+  .model-switch-confirm-actions {
+    display: flex;
+    gap: 8px;
+    justify-content: flex-end;
+  }
+
+  .model-switch-confirm-cancel {
+    padding: 6px 14px;
+    color: #475569;
+    font-size: 13px;
+    background: #f1f5f9;
+    border: 0;
+    border-radius: 8px;
+    cursor: pointer;
+  }
+
+  .model-switch-confirm-cancel:hover {
+    background: #e2e8f0;
+  }
+
+  .model-switch-confirm-ok {
+    padding: 6px 14px;
+    color: #ffffff;
+    font-size: 13px;
+    font-weight: 600;
+    background: #4f46e5;
+    border: 0;
+    border-radius: 8px;
+    cursor: pointer;
+  }
+
+  .model-switch-confirm-ok:hover {
+    background: #4338ca;
+  }
+
+  .chat-header-selector-button-active {
+    color: #4f46e5;
+    background: #eef2ff;
+  }
+
+  .message-checkbox-label {
+    display: inline-flex;
+    align-items: center;
+    padding: 4px 8px 4px 4px;
+    cursor: pointer;
+  }
+
+  .message-checkbox {
+    width: 16px;
+    height: 16px;
+    cursor: pointer;
+  }
+
+  .message-selected {
+    background: #f0f5ff;
+    border-radius: 8px;
+    outline: 2px solid #93c5fd;
+    outline-offset: -2px;
+  }
+
+  .multi-select-bar {
+    display: flex;
+    gap: 12px;
+    align-items: center;
+    justify-content: center;
+    padding: 8px 12px;
+    background: #ffffff;
+    border-top: 1px solid var(--webui-divider);
+  }
+
+  .multi-select-bar-count {
+    font-size: 13px;
+    font-weight: 600;
+    color: #475569;
+    white-space: nowrap;
+  }
+
+  .multi-select-bar-actions {
+    display: flex;
+    gap: 8px;
+  }
+
+  .multi-select-bar-button {
+    padding: 6px 14px;
+    color: #475569;
+    font-size: 12px;
+    font-weight: 500;
+    background: #f1f5f9;
+    border: 0;
+    border-radius: 8px;
+    cursor: pointer;
+  }
+
+  .multi-select-bar-button:hover {
+    background: #e2e8f0;
+  }
+
   .context-orb {
     display: grid;
     width: 32px;
@@ -4468,6 +4721,79 @@
     background: #334155;
   }
 
+  :root[data-webui-theme='dark'] .chat-header-selector-button {
+    color: #cbd5e1;
+    background: #334155;
+  }
+
+  :root[data-webui-theme='dark'] .chat-header-selector-button:hover,
+  :root[data-webui-theme='dark'] .chat-header-selector-button:focus-visible {
+    background: #475569;
+  }
+
+  :root[data-webui-theme='dark'] .chat-header-picker-menu {
+    background: #1e293b;
+    border-color: #334155;
+    box-shadow: 0 12px 32px rgb(0 0 0 / 40%);
+  }
+
+  :root[data-webui-theme='dark'] .chat-header-picker-option {
+    color: #e5e7eb;
+  }
+
+  :root[data-webui-theme='dark'] .chat-header-picker-option:hover,
+  :root[data-webui-theme='dark'] .chat-header-picker-option:focus-visible {
+    background: #334155;
+  }
+
+  :root[data-webui-theme='dark'] .chat-header-picker-option-selected {
+    color: #93c5fd;
+  }
+
+  :root[data-webui-theme='dark'] .chat-header-picker-option-detail {
+    color: #94a3b8;
+  }
+
+  :root[data-webui-theme='dark'] .chat-header-picker-placeholder {
+    color: #64748b;
+  }
+
+  :root[data-webui-theme='dark'] .model-switch-confirm-dialog {
+    background: #1e293b;
+    border-color: #334155;
+    box-shadow: 0 12px 32px rgb(0 0 0 / 40%);
+  }
+
+  :root[data-webui-theme='dark'] .model-switch-confirm-title {
+    color: #e5e7eb;
+  }
+
+  :root[data-webui-theme='dark'] .model-switch-confirm-description {
+    color: #94a3b8;
+  }
+
+  :root[data-webui-theme='dark'] .model-switch-confirm-skip {
+    color: #94a3b8;
+  }
+
+  :root[data-webui-theme='dark'] .model-switch-confirm-cancel {
+    color: #cbd5e1;
+    background: #334155;
+  }
+
+  :root[data-webui-theme='dark'] .model-switch-confirm-cancel:hover {
+    background: #475569;
+  }
+
+  :root[data-webui-theme='dark'] .model-switch-confirm-ok {
+    color: #ffffff;
+    background: #6366f1;
+  }
+
+  :root[data-webui-theme='dark'] .model-switch-confirm-ok:hover {
+    background: #818cf8;
+  }
+
   :root[data-webui-theme='dark'] .language-picker-option {
     color: #e5e7eb;
   }
@@ -4475,6 +4801,34 @@
   :root[data-webui-theme='dark'] .language-picker-option:hover,
   :root[data-webui-theme='dark'] .language-picker-option-selected {
     background: #334155;
+  }
+
+  :root[data-webui-theme='dark'] .chat-header-selector-button-active {
+    color: #93c5fd;
+    background: #1e3a5f;
+  }
+
+  :root[data-webui-theme='dark'] .message-selected {
+    background: #1e293b;
+    outline-color: #3b82f6;
+  }
+
+  :root[data-webui-theme='dark'] .multi-select-bar {
+    background: #1e293b;
+    border-top-color: #334155;
+  }
+
+  :root[data-webui-theme='dark'] .multi-select-bar-count {
+    color: #94a3b8;
+  }
+
+  :root[data-webui-theme='dark'] .multi-select-bar-button {
+    color: #cbd5e1;
+    background: #334155;
+  }
+
+  :root[data-webui-theme='dark'] .multi-select-bar-button:hover {
+    background: #475569;
   }
 
   :root[data-webui-theme='dark'] .agent-status-hover-card,
@@ -4756,6 +5110,10 @@
   :root[data-webui-theme='light'] .permission-mode-option:hover,
   :root[data-webui-theme='light'] .permission-mode-option:focus-visible,
   :root[data-webui-theme='light'] .permission-mode-option-selected,
+  :root[data-webui-theme='light'] .chat-header-picker-option:hover,
+  :root[data-webui-theme='light'] .chat-header-picker-option:focus-visible,
+  :root[data-webui-theme='light'] .chat-header-picker-option-selected,
+  :root[data-webui-theme='light'] .chat-header-selector-button-active,
   :root[data-webui-theme='light'] .slash-command-option:hover,
   :root[data-webui-theme='light'] .theme-toggle-button:hover {
     background: #eef2ff;

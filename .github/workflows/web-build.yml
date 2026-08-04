@@ -1,7 +1,9 @@
 name: Build Cherry Studio WebUI Static
 
-# Fork-only: builds are manual (workflow_dispatch) — never on push.
+# Fork-only: builds on push to webui or manual (workflow_dispatch).
 on:
+  push:
+    branches: [webui]
   workflow_dispatch:
 
 permissions:

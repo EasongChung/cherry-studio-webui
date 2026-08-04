@@ -104,6 +104,11 @@ export const createWebUiHttpClient = ({
       requestJson<TResponse>(path, {
         method: 'DELETE'
       }),
+    putJson: <TResponse>(path: string, body: unknown) =>
+      requestJson<TResponse>(path, {
+        body: JSON.stringify(body),
+        method: 'PUT'
+      }),
     setAuthKey: (key: string) => {
       authKey = key.trim()
     }

@@ -242,6 +242,14 @@ export type WebUiAgentEntity = {
   }
 }
 
+export type WebUiAgentWorkspace = {
+  readonly id: string
+  readonly name: string
+  readonly path: string
+  readonly type: 'user' | 'system'
+  readonly orderKey: string
+}
+
 export type WebUiModel = {
   readonly id: string
   readonly name: string

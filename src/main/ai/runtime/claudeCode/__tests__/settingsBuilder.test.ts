@@ -188,31 +188,9 @@ vi.mock('../ToolApprovalRegistry', () => ({
   }
 }))
 
-const {
-  buildClaudeCodeSessionSettings,
-  disposeToolPolicySnapshot,
-  resolveAutoCompactWindow,
-  registerMcpSessionCatalogSync
-} = await import('../settingsBuilder')
-
-describe('resolveAutoCompactWindow', () => {
-  it('uses 90% below 500k and 50% at/above 500k, with 200k fallback', () => {
-    expect(resolveAutoCompactWindow(undefined)).toBe(180_000)
-    expect(resolveAutoCompactWindow(0)).toBe(180_000)
-    expect(resolveAutoCompactWindow(200_000)).toBe(180_000)
-    expect(resolveAutoCompactWindow(128_000)).toBe(115_200)
-    expect(resolveAutoCompactWindow(499_999)).toBe(449_999)
-    expect(resolveAutoCompactWindow(500_000)).toBe(250_000)
-    expect(resolveAutoCompactWindow(1_000_000)).toBe(500_000)
-  })
-
-  it('clamps to the SDK settings schema range [1e5, 1e6]', () => {
-    // 100k * 0.9 = 90k → clamp up to 100k
-    expect(resolveAutoCompactWindow(100_000)).toBe(100_000)
-    // 2M * 0.5 = 1M → already at max
-    expect(resolveAutoCompactWindow(2_000_000)).toBe(1_000_000)
-  })
-})
+const { buildClaudeCodeSessionSettings, disposeToolPolicySnapshot, registerMcpSessionCatalogSync } = await import(
+  '../settingsBuilder'
+)
 
 describe('buildClaudeCodeSessionSettings', () => {
   beforeEach(() => {
@@ -337,26 +315,9 @@ describe('buildClaudeCodeSessionSettings', () => {
       '/app/feature.agents.data/agent-1'
     )
     expect(settings.systemPrompt as string).toContain('"/workspace/project"')
-    // No model contextWindow → fallback 200k * 0.9
-    expect(settings.settings).toMatchObject({ autoCompactEnabled: true, autoCompactWindow: 180_000, fastMode: true })
+    expect(settings.settings).toMatchObject({ fastMode: true })
     expect(settings).not.toHaveProperty('fastMode')
     expect(settings.forwardSubagentText).toBe(true)
-  })
-
-  it('derives autoCompactWindow from the agent model contextWindow', async () => {
-    const session = {
-      id: 'session-1',
-      agentId: 'agent-1',
-      workspace: { type: 'user', path: '/workspace/project' }
-    }
-
-    mocks.modelGetByKey.mockReturnValue({ apiModelId: 'claude-api', contextWindow: 200_000 })
-    const small = await buildClaudeCodeSessionSettings(session as never, {} as never)
-    expect(small.settings).toMatchObject({ autoCompactEnabled: true, autoCompactWindow: 180_000 })
-
-    mocks.modelGetByKey.mockReturnValue({ apiModelId: 'claude-api', contextWindow: 1_000_000 })
-    const large = await buildClaudeCodeSessionSettings(session as never, {} as never)
-    expect(large.settings).toMatchObject({ autoCompactEnabled: true, autoCompactWindow: 500_000 })
   })
 
   it('builds configured MCP bridges from the request snapshot instead of re-reading edited rows', async () => {

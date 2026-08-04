@@ -198,6 +198,7 @@ const fileEntryPath = /^\/api\/files\/([^/]+)$/
 const readableDataApiPatterns = [
   /^\/agents$/,
   /^\/models$/,
+  /^\/agent-workspaces$/,
   /^\/agent-sessions$/,
   /^\/agent-sessions\/latest$/,
   /^\/agent-sessions\/[^/]+$/,
@@ -205,6 +206,7 @@ const readableDataApiPatterns = [
 ] as const
 const deletableDataApiMessagePath = /^\/agent-sessions\/([^/]+)\/messages\/[^/]+$/
 const writableDataApiSessionPath = /^\/agent-sessions\/([^/]+)$/
+const writableDataApiSessionWorkspacePath = /^\/agent-sessions\/([^/]+)\/workspace$/
 
 const toQueryRecord = (searchParams: URLSearchParams) => {
   const query: Record<string, string> = {}
@@ -502,8 +504,9 @@ const handleDataApiProxy = async (
   const sessionMessageDeleteMatch = method === 'DELETE' ? dataPath.match(deletableDataApiMessagePath) : null
   const sessionWriteMatch =
     method === 'PATCH' || method === 'DELETE' ? dataPath.match(writableDataApiSessionPath) : null
+  const workspaceWriteMatch = method === 'PUT' ? dataPath.match(writableDataApiSessionWorkspacePath) : null
 
-  if (!isRead && !isSessionCreate && !sessionMessageDeleteMatch && !sessionWriteMatch) {
+  if (!isRead && !isSessionCreate && !sessionMessageDeleteMatch && !sessionWriteMatch && !workspaceWriteMatch) {
     return {
       status: 404,
       body: {
@@ -514,7 +517,7 @@ const handleDataApiProxy = async (
   }
 
   try {
-    const body = isSessionCreate || method === 'PATCH' ? await readJsonBody(request) : undefined
+    const body = isSessionCreate || method === 'PATCH' || method === 'PUT' ? await readJsonBody(request) : undefined
     const apiRequest: DataRequest = {
       id: randomUUID(),
       method: method as HttpMethod,
