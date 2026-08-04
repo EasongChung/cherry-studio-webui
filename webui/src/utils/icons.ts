@@ -1,6 +1,14 @@
 import { h } from 'vue'
 
-export type ComposerToolIconName = 'attachment' | 'newConversation' | 'thinking' | 'permission'
+export type ComposerToolIconName =
+  | 'attachment'
+  | 'newConversation'
+  | 'thinking'
+  | 'permission'
+  | 'skill'
+  | 'knowledge'
+  | 'compact'
+  | 'fastMode'
 
 export type ActionIconName =
   | 'copy'
@@ -97,6 +105,29 @@ export const renderComposerToolIcon = (name: ComposerToolIconName) => {
       h('path', { d: 'M12 3 5 6v6c0 4.5 3 7.5 7 9 4-1.5 7-4.5 7-9V6l-7-3z' }),
       h('path', { d: 'm9 12 2 2 4-4' })
     ])
+  }
+
+  if (name === 'skill') {
+    // Zap: a named skill is used like a capability / prompt aid.
+    return h('svg', iconBaseProps, [h('path', { d: 'M13 2 3 14h9l-1 8 10-12h-9l1-8z' })])
+  }
+
+  if (name === 'knowledge') {
+    // Book-open: knowledge base reference.
+    return h('svg', iconBaseProps, [
+      h('path', { d: 'M4 19.5A2.5 2.5 0 0 1 6.5 17H20' }),
+      h('path', { d: 'M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z' })
+    ])
+  }
+
+  if (name === 'compact') {
+    // Compress: arrows converging toward the center (context compaction).
+    return h('svg', iconBaseProps, [h('path', { d: 'm6 9 6-6 6 6' }), h('path', { d: 'm6 15 6 6 6-6' })])
+  }
+
+  if (name === 'fastMode') {
+    // Fast-forward: priority service tier for fast responses.
+    return h('svg', iconBaseProps, [h('path', { d: 'm5 5 6 7-6 7V5z' }), h('path', { d: 'm13 5 6 7-6 7V5z' })])
   }
 
   return h('svg', iconBaseProps, [

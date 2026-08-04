@@ -62,6 +62,7 @@ type WebUiSendMessageBody = {
   readonly text: string
   readonly attachments: readonly WebUiSendAttachment[]
   readonly reasoningEffort?: string
+  readonly fastMode?: boolean
 }
 
 type WebUiSendAttachment = {
@@ -187,6 +188,7 @@ const sessionMessagePath = /^\/api\/agent-sessions\/([^/]+)\/messages$/
 const sessionAbortPath = /^\/api\/agent-sessions\/([^/]+)\/abort$/
 const sessionContextUsagePath = /^\/api\/agent-sessions\/([^/]+)\/context-usage$/
 const sessionSlashCommandsPath = /^\/api\/agent-sessions\/([^/]+)\/slash-commands$/
+const sessionKnowledgeSearchPath = /^\/api\/agent-sessions\/([^/]+)\/knowledge-search$/
 const sessionModelPath = /^\/api\/agent-sessions\/([^/]+)\/model$/
 const sessionPermissionModePath = /^\/api\/agent-sessions\/([^/]+)\/permission-mode$/
 const sessionToolApprovalsPath = /^\/api\/agent-sessions\/([^/]+)\/tool-approvals$/
@@ -202,7 +204,9 @@ const readableDataApiPatterns = [
   /^\/agent-sessions$/,
   /^\/agent-sessions\/latest$/,
   /^\/agent-sessions\/[^/]+$/,
-  /^\/agent-sessions\/[^/]+\/messages$/
+  /^\/agent-sessions\/[^/]+\/messages$/,
+  /^\/skills(?:$|\/)/,
+  /^\/knowledge-bases(?:$|\/)/
 ] as const
 const deletableDataApiMessagePath = /^\/agent-sessions\/([^/]+)\/messages\/[^/]+$/
 const writableDataApiSessionPath = /^\/agent-sessions\/([^/]+)$/
@@ -239,7 +243,7 @@ const readJsonBody = async (request: IncomingMessage, maxBytes = MAX_WEBUI_MESSA
 
 const parseSendMessageBody = (value: unknown): WebUiSendMessageBody | undefined => {
   if (!value || typeof value !== 'object') return undefined
-  const candidate = value as { text?: unknown; attachments?: unknown; reasoningEffort?: unknown }
+  const candidate = value as { text?: unknown; attachments?: unknown; reasoningEffort?: unknown; fastMode?: unknown }
   if (typeof candidate.text !== 'string') return undefined
 
   const text = candidate.text.trim()
@@ -275,7 +279,8 @@ const parseSendMessageBody = (value: unknown): WebUiSendMessageBody | undefined 
   }
   if (!text && attachments.length === 0) return undefined
   const reasoningEffort = typeof candidate.reasoningEffort === 'string' ? candidate.reasoningEffort : undefined
-  return { text, attachments, ...(reasoningEffort ? { reasoningEffort } : {}) }
+  const fastMode = candidate.fastMode === true
+  return { text, attachments, ...(reasoningEffort ? { reasoningEffort } : {}), ...(fastMode ? { fastMode: true } : {}) }
 }
 
 const parseUpdateSessionModelBody = (value: unknown): WebUiUpdateSessionModelBody | undefined => {
@@ -581,6 +586,7 @@ export const createWebUiApiRouter = ({
     const abortMatch = pathname.match(sessionAbortPath)
     const contextUsageMatch = pathname.match(sessionContextUsagePath)
     const slashCommandsMatch = pathname.match(sessionSlashCommandsPath)
+    const knowledgeSearchMatch = pathname.match(sessionKnowledgeSearchPath)
     const sessionModelMatch = pathname.match(sessionModelPath)
     const sessionPermissionModeMatch = pathname.match(sessionPermissionModePath)
     const sessionToolApprovalsMatch = pathname.match(sessionToolApprovalsPath)
@@ -834,6 +840,30 @@ export const createWebUiApiRouter = ({
       return { status: 200, body: { commands } }
     }
 
+    if (knowledgeSearchMatch) {
+      if (method !== 'GET') return methodNotAllowed(['GET'])
+      const baseId = url.searchParams.get('baseId') ?? ''
+      const query = url.searchParams.get('query')?.trim() ?? ''
+      if (!baseId || !query)
+        return {
+          status: 400,
+          body: { code: 'WEBUI_INVALID_KNOWLEDGE_SEARCH', message: 'baseId and query are required' }
+        }
+      try {
+        // WebUI desktop bridge: semantic search over a knowledge base
+        const results = await application.get('KnowledgeService').search(baseId, query)
+        return { status: 200, body: { results } }
+      } catch (error) {
+        return {
+          status: 500,
+          body: {
+            code: 'WEBUI_KNOWLEDGE_SEARCH_FAILED',
+            message: error instanceof Error ? error.message : 'Knowledge search failed'
+          }
+        }
+      }
+    }
+
     if (sessionModelMatch) {
       if (method !== 'PATCH') return methodNotAllowed(['PATCH'])
 
@@ -1059,7 +1089,8 @@ export const createWebUiApiRouter = ({
             sessionId,
             userParts,
             listeners: [new WebUiStreamListener(sessionId, sseRelay)],
-            headless: false
+            headless: false,
+            fastMode: body.fastMode === true
           })
         } catch (error) {
           if (createdEntryIds.length > 0) {

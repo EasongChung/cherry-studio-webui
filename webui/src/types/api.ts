@@ -57,6 +57,34 @@ export type WebUiSlashCommandsResponse = {
   readonly commands: readonly WebUiSlashCommand[]
 }
 
+/** Installed skill exposed by the desktop Data API (`GET /skills`). */
+export type WebUiSkill = {
+  readonly id: string
+  readonly name: string
+  readonly description?: string
+  readonly isEnabled?: boolean
+}
+
+/** Knowledge base exposed by the desktop Data API (`GET /knowledge-bases`). */
+export type WebUiKnowledgeBase = {
+  readonly id: string
+  readonly name: string
+  readonly embeddingModelId?: string | null
+}
+
+/** Semantic search hit from the WebUI knowledge-search narrow bridge. */
+export type WebUiKnowledgeSearchResult = {
+  readonly pageContent?: string
+  readonly score?: number
+  readonly rank?: number
+  readonly chunkId?: string
+  readonly title?: string
+}
+
+export type WebUiKnowledgeSearchResponse = {
+  readonly results: readonly WebUiKnowledgeSearchResult[]
+}
+
 /** Real token usage surfaced by the desktop Data API (mirrors `MessageStats`). */
 export type WebUiMessageTokenStats = {
   readonly totalTokens: number
@@ -259,6 +287,7 @@ export type WebUiModel = {
   readonly isHidden: boolean
   readonly capabilities: readonly string[]
   readonly reasoningOptions?: readonly string[]
+  readonly supportsFastMode?: boolean
 }
 
 export type WebUiModelGroup = {

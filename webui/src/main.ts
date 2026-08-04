@@ -36,6 +36,9 @@ import type {
   WebUiCreateSessionWorkspace,
   WebUiCursorResponse,
   WebUiHealthResponse,
+  WebUiKnowledgeBase,
+  WebUiKnowledgeSearchResponse,
+  WebUiKnowledgeSearchResult,
   WebUiMessageSnapshot,
   WebUiMessageTokenStats,
   WebUiModel,
@@ -47,6 +50,7 @@ import type {
   WebUiPreferencesResponse,
   WebUiRole,
   WebUiSendAttachment,
+  WebUiSkill,
   WebUiSlashCommand,
   WebUiSlashCommandsResponse,
   WebUiToolApprovalResponse,
@@ -243,9 +247,28 @@ const App = defineComponent({
     const permissionModePickerOpen = ref(false)
     const agentPickerOpen = ref(false)
     const workspacePickerOpen = ref(false)
+    const skillPickerOpen = ref(false)
+    /** Enabled skills for the currently selected agent (Skill launcher). */
+    const skills = ref<readonly WebUiSkill[]>([])
+    const skillSearchQuery = ref('')
+    const kbPickerOpen = ref(false)
+    /** Knowledge bases available for semantic-search reference (baseId picker). */
+    const knowledgeBases = ref<readonly WebUiKnowledgeBase[]>([])
+    const kbSelectedBaseId = ref('')
+    const kbSearchQuery = ref('')
+    const kbResults = ref<readonly WebUiKnowledgeSearchResult[]>([])
+    const kbSearching = ref(false)
     const workspaces = ref<readonly WebUiAgentWorkspace[]>([])
     const workspacesLoading = ref(false)
     const reasoningEffort = ref('default')
+    /** Fast-mode toggle (openai-priority service tier). Restored from localStorage — an
+     *  authoring preference, not session data, so it survives reloads without persistence. */
+    const fastModeEnabled = ref(false)
+    try {
+      fastModeEnabled.value = window.localStorage.getItem('cherry-webui.fastmode') === '1'
+    } catch {
+      fastModeEnabled.value = false
+    }
     const modelUpdateState = ref<'idle' | 'updating' | 'error'>('idle')
     const permissionModeUpdateState = ref<'idle' | 'updating' | 'error'>('idle')
     const agentUpdateState = ref<'idle' | 'updating' | 'error'>('idle')
@@ -326,6 +349,28 @@ const App = defineComponent({
       return agents.value.find((agent) => agent.id === agentId)?.name
     })
     const selectedAgent = computed(() => agents.value.find((agent) => agent.id === selectedConversation.value?.agentId))
+    /** Whether the selected agent's model advertises fast-mode support (openai-priority). */
+    const fastModeSupported = computed(() => {
+      const modelId = selectedAgent.value?.model
+      if (!modelId) return false
+      for (const group of modelGroups.value) {
+        const model = group.models.find((candidate) => candidate.id === modelId)
+        if (model?.supportsFastMode) return true
+      }
+      return false
+    })
+    const toggleFastMode = () => {
+      fastModeEnabled.value = !fastModeEnabled.value
+      try {
+        if (fastModeEnabled.value) {
+          window.localStorage.setItem('cherry-webui.fastmode', '1')
+        } else {
+          window.localStorage.removeItem('cherry-webui.fastmode')
+        }
+      } catch {
+        // localStorage unavailable — the toggle still applies for this page load.
+      }
+    }
     const selectedPermissionMode = computed<WebUiPermissionMode>(() => {
       const mode = selectedAgent.value?.configuration?.permission_mode
       if (mode === 'plan' || mode === 'acceptEdits' || mode === 'bypassPermissions' || mode === 'default') return mode
@@ -441,11 +486,28 @@ const App = defineComponent({
     })
     const slashCommandSuggestions = computed(() => {
       const input = composerText.value.trimStart()
-      if (modelPickerOpen.value || !input.startsWith('/')) return []
+      if (modelPickerOpen.value || skillPickerOpen.value || kbPickerOpen.value || !input.startsWith('/')) return []
 
       const query = input.slice(1).toLowerCase()
-      return slashCommands.value.filter((command) => command.name.toLowerCase().startsWith(query)).slice(0, 6)
+      const matches = slashCommands.value.filter((command) => command.name.toLowerCase().startsWith(query))
+      // Compaction is a runtime slash command (Claude Code built-in). Surface a built-in
+      // candidate when the host catalog does not (e.g. it is filtered by host-managed
+      // slash commands) so the entry stays reachable for the user.
+      if (!matches.some((command) => command.name.toLowerCase() === 'compact') && 'compact'.startsWith(query)) {
+        matches.push({ name: 'compact', description: text('compactDescription') })
+      }
+      return matches.slice(0, 6)
     })
+    const skillsFiltered = computed(() => {
+      const query = skillSearchQuery.value.trim().toLowerCase()
+      if (!query) return skills.value
+      return skills.value.filter(
+        (skill) => skill.name.toLowerCase().includes(query) || (skill.description ?? '').toLowerCase().includes(query)
+      )
+    })
+    const kbSelectedBaseName = computed(
+      () => knowledgeBases.value.find((base) => base.id === kbSelectedBaseId.value)?.name ?? ''
+    )
     const showEmptyConversationGreeting = computed(() =>
       Boolean(selectedConversation.value && messages.value.length === 0 && messageLoadState.value === 'ready')
     )
@@ -2248,6 +2310,7 @@ const App = defineComponent({
         await httpClient.patchJson(`/api/data/agent-sessions/${encodeURIComponent(conversationId)}`, { agentId })
         await loadAgents()
         // SSE session-updated 会触发 refreshFromDesktopSync → loadConversations
+        refreshSkills(agentId)
         agentPickerOpen.value = false
         agentUpdateState.value = 'idle'
       } catch (error) {
@@ -2352,6 +2415,29 @@ const App = defineComponent({
         })
     }
 
+    const refreshSkills = (agentId: string | null | undefined = selectedAgentId.value) => {
+      const suffix = agentId ? `?agentId=${encodeURIComponent(agentId)}` : ''
+      void httpClient
+        .getJson<readonly WebUiSkill[]>(`/api/data/skills${suffix}`)
+        .then((response) => {
+          skills.value = response
+        })
+        .catch(() => {
+          skills.value = []
+        })
+    }
+
+    const refreshKnowledgeBases = () => {
+      void httpClient
+        .getJson<readonly WebUiKnowledgeBase[]>('/api/data/knowledge-bases')
+        .then((response) => {
+          knowledgeBases.value = response
+        })
+        .catch(() => {
+          knowledgeBases.value = []
+        })
+    }
+
     const selectConversation = (conversationId: string, options?: { reveal?: boolean }) => {
       clearStatusPreviewTimers()
       closeConversationMenu()
@@ -2368,6 +2454,8 @@ const App = defineComponent({
         void loadConversationMessages(conversationId, 'refresh')
         refreshComposerInfo(conversationId)
         refreshSlashCommands(conversationId)
+        refreshSkills(target?.agentId)
+        refreshKnowledgeBases()
         if (statusPanelOpen.value && rightPanelTab.value === 'files') refreshWorkspaceFiles()
         return
       }
@@ -2404,6 +2492,8 @@ const App = defineComponent({
       void loadConversationMessages(conversationId)
       refreshComposerInfo(conversationId)
       refreshSlashCommands(conversationId)
+      refreshSkills(target?.agentId)
+      refreshKnowledgeBases()
     }
 
     const toggleConversationMenu = (conversationId: string) => {
@@ -3227,6 +3317,62 @@ const App = defineComponent({
         textarea.setSelectionRange(position, position)
       })
     }
+    const focusComposerEnd = () => {
+      void nextTick(() => {
+        const textarea = composerTextarea.value
+        if (!textarea) return
+        textarea.focus()
+        const position = textarea.value.length
+        textarea.setSelectionRange(position, position)
+      })
+    }
+    const insertSkillReference = (skill: WebUiSkill) => {
+      // Prompt-level reference to an available skill (@mention style). Runtime
+      // recognition is verified on-device; falls back to `/use <name>` if needed.
+      const ref = `@${skill.name}${skill.description ? `: ${skill.description}` : ''}`
+      composerText.value = composerText.value ? `${ref}\n\n${composerText.value}` : ref
+      skillPickerOpen.value = false
+      saveComposerDraft()
+      focusComposerEnd()
+    }
+    const insertCompact = () => {
+      // Compaction entry point: /compact is a runtime slash command executed as a
+      // normal message by the agent session. Fill the composer and let the user
+      // review / send.
+      composerText.value = '/compact'
+      saveComposerDraft()
+      focusComposerEnd()
+    }
+    const searchKnowledge = async () => {
+      const baseId = kbSelectedBaseId.value
+      const query = kbSearchQuery.value.trim()
+      const conversationId = selectedConversationId.value
+      if (!baseId || !query || !conversationId) return
+      kbSearching.value = true
+      try {
+        const response = await httpClient.getJson<WebUiKnowledgeSearchResponse>(
+          `/api/agent-sessions/${encodeURIComponent(conversationId)}/knowledge-search?baseId=${encodeURIComponent(baseId)}&query=${encodeURIComponent(query)}`
+        )
+        if (selectedConversationId.value === conversationId) kbResults.value = response.results
+      } catch {
+        if (selectedConversationId.value === conversationId) kbResults.value = []
+      } finally {
+        kbSearching.value = false
+      }
+    }
+    const insertKnowledgeReference = (result: WebUiKnowledgeSearchResult) => {
+      const baseName =
+        knowledgeBases.value.find((base) => base.id === kbSelectedBaseId.value)?.name || kbSelectedBaseId.value
+      const title = result.title || baseName
+      const snippet = (result.pageContent ?? '').slice(0, 400)
+      const block = [`> 📚 ${title}`, ...snippet.split('\n').map((line) => `> ${line}`)].join('\n')
+      composerText.value = composerText.value ? `${block}\n\n${composerText.value}` : block
+      kbPickerOpen.value = false
+      kbResults.value = []
+      kbSearchQuery.value = ''
+      saveComposerDraft()
+      focusComposerEnd()
+    }
 
     const submitMessage = async (options?: { force?: boolean }) => {
       const conversationId = selectedConversationId.value
@@ -3267,7 +3413,8 @@ const App = defineComponent({
         await httpClient.postJson(`/api/agent-sessions/${encodeURIComponent(conversationId)}/messages`, {
           text: messageText,
           attachments: sendAttachments,
-          reasoningEffort: reasoningEffort.value
+          reasoningEffort: reasoningEffort.value,
+          fastMode: fastModeEnabled.value ? true : undefined
         })
         finalizeSubmittedMessage()
         // One-shot pin after the user bubble is visible. Stream follow after this is only while
@@ -4802,6 +4949,91 @@ const App = defineComponent({
                               }
                             },
                             renderComposerToolIcon('permission')
+                          ),
+                          h(
+                            'button',
+                            {
+                              class: ['composer-tool-button', { 'composer-tool-button-active': skillPickerOpen.value }],
+                              type: 'button',
+                              disabled: !selectedConversation.value,
+                              title: text('skillLauncher'),
+                              'aria-label': text('skillLauncher'),
+                              'aria-expanded': skillPickerOpen.value,
+                              onClick: () => {
+                                skillPickerOpen.value = !skillPickerOpen.value
+                                modelPickerOpen.value = false
+                                reasoningPickerOpen.value = false
+                                permissionModePickerOpen.value = false
+                                agentPickerOpen.value = false
+                                workspacePickerOpen.value = false
+                                kbPickerOpen.value = false
+                              }
+                            },
+                            renderComposerToolIcon('skill')
+                          ),
+                          h(
+                            'button',
+                            {
+                              class: ['composer-tool-button', { 'composer-tool-button-active': kbPickerOpen.value }],
+                              type: 'button',
+                              disabled: !selectedConversation.value,
+                              title: text('knowledgeSearch'),
+                              'aria-label': text('knowledgeSearch'),
+                              'aria-expanded': kbPickerOpen.value,
+                              onClick: () => {
+                                kbPickerOpen.value = !kbPickerOpen.value
+                                modelPickerOpen.value = false
+                                reasoningPickerOpen.value = false
+                                permissionModePickerOpen.value = false
+                                agentPickerOpen.value = false
+                                workspacePickerOpen.value = false
+                                skillPickerOpen.value = false
+                              }
+                            },
+                            renderComposerToolIcon('knowledge')
+                          ),
+                          h(
+                            'button',
+                            {
+                              class: 'composer-tool-button',
+                              type: 'button',
+                              disabled: !selectedConversation.value,
+                              title: text('compact'),
+                              'aria-label': text('compact'),
+                              onClick: () => {
+                                modelPickerOpen.value = false
+                                reasoningPickerOpen.value = false
+                                permissionModePickerOpen.value = false
+                                agentPickerOpen.value = false
+                                workspacePickerOpen.value = false
+                                skillPickerOpen.value = false
+                                kbPickerOpen.value = false
+                                insertCompact()
+                              }
+                            },
+                            renderComposerToolIcon('compact')
+                          ),
+                          h(
+                            'button',
+                            {
+                              class: ['composer-tool-button', { 'composer-tool-button-active': fastModeEnabled.value }],
+                              type: 'button',
+                              disabled: !selectedConversation.value || !fastModeSupported.value,
+                              title: text('fastModeDescription'),
+                              'aria-label': text('fastMode'),
+                              'aria-pressed': fastModeEnabled.value,
+                              onClick: () => {
+                                modelPickerOpen.value = false
+                                reasoningPickerOpen.value = false
+                                permissionModePickerOpen.value = false
+                                agentPickerOpen.value = false
+                                workspacePickerOpen.value = false
+                                skillPickerOpen.value = false
+                                kbPickerOpen.value = false
+                                toggleFastMode()
+                              }
+                            },
+                            renderComposerToolIcon('fastMode')
                           )
                         ]),
                         h(
@@ -5118,6 +5350,118 @@ const App = defineComponent({
                               )
                             )
                           )
+                        : undefined,
+                      skillPickerOpen.value
+                        ? h('div', { class: 'skill-picker-menu', role: 'listbox' }, [
+                            h('input', {
+                              class: 'skill-picker-search',
+                              type: 'search',
+                              placeholder: text('skillSearchPlaceholder'),
+                              value: skillSearchQuery.value,
+                              onInput: (event: Event) => {
+                                skillSearchQuery.value = (event.target as HTMLInputElement).value
+                              }
+                            }),
+                            skillsFiltered.value.length
+                              ? skillsFiltered.value.map((skill) =>
+                                  h(
+                                    'button',
+                                    {
+                                      class: 'skill-picker-option',
+                                      key: skill.id,
+                                      type: 'button',
+                                      role: 'option',
+                                      onClick: () => {
+                                        insertSkillReference(skill)
+                                      }
+                                    },
+                                    [
+                                      h('span', { class: 'skill-picker-name' }, skill.name),
+                                      skill.description
+                                        ? h('span', { class: 'skill-picker-description' }, skill.description)
+                                        : undefined
+                                    ]
+                                  )
+                                )
+                              : h('div', { class: 'skill-picker-empty' }, text('skillLauncherEmpty'))
+                          ])
+                        : undefined,
+                      kbPickerOpen.value
+                        ? h('div', { class: 'kb-picker-menu' }, [
+                            h('div', { class: 'kb-picker-label' }, text('knowledgeSelectBase')),
+                            h('div', { class: 'kb-picker-bases' }, [
+                              knowledgeBases.value.length
+                                ? knowledgeBases.value.map((base) =>
+                                    h(
+                                      'button',
+                                      {
+                                        class: [
+                                          'kb-base-option',
+                                          { 'kb-base-option-selected': base.id === kbSelectedBaseId.value }
+                                        ],
+                                        key: base.id,
+                                        type: 'button',
+                                        onClick: () => {
+                                          kbSelectedBaseId.value = base.id
+                                          kbResults.value = []
+                                        }
+                                      },
+                                      base.name
+                                    )
+                                  )
+                                : h('div', { class: 'kb-picker-empty' }, text('knowledgeSelectBaseEmpty'))
+                            ]),
+                            h('div', { class: 'kb-picker-search-row' }, [
+                              h('input', {
+                                class: 'kb-picker-search',
+                                type: 'search',
+                                placeholder: text('knowledgeSearchPlaceholder'),
+                                disabled: !kbSelectedBaseId.value,
+                                value: kbSearchQuery.value,
+                                onKeydown: (event: KeyboardEvent) => {
+                                  if (event.key === 'Enter') void searchKnowledge()
+                                },
+                                onInput: (event: Event) => {
+                                  kbSearchQuery.value = (event.target as HTMLInputElement).value
+                                }
+                              }),
+                              h(
+                                'button',
+                                {
+                                  class: 'kb-picker-search-button',
+                                  type: 'button',
+                                  disabled: !kbSelectedBaseId.value || kbSearching.value,
+                                  onClick: () => void searchKnowledge()
+                                },
+                                kbSearching.value ? text('knowledgeSearching') : text('knowledgeSearch')
+                              )
+                            ]),
+                            kbResults.value.length
+                              ? kbResults.value.map((result, index) =>
+                                  h(
+                                    'button',
+                                    {
+                                      class: 'kb-result-option',
+                                      key: result.chunkId ?? `result-${index}`,
+                                      type: 'button',
+                                      onClick: () => {
+                                        insertKnowledgeReference(result)
+                                      }
+                                    },
+                                    [
+                                      h('span', { class: 'kb-result-title' }, result.title || kbSelectedBaseName.value),
+                                      h(
+                                        'span',
+                                        { class: 'kb-result-snippet' },
+                                        (result.pageContent ?? '').slice(0, 200)
+                                      )
+                                    ]
+                                  )
+                                )
+                              : kbSelectedBaseId.value && kbSearchQuery.value.trim()
+                                ? h('div', { class: 'kb-picker-empty' }, text('knowledgeSearchNoResult'))
+                                : undefined
+                          ])
                         : undefined
                     ]
                   )

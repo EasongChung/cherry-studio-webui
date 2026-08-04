@@ -28,6 +28,7 @@ export async function startAgentSessionRun(input: {
   userParts: CherryMessagePart[]
   listeners: StreamListener[]
   headless?: boolean
+  fastMode?: boolean
 }): Promise<void> {
   if (input.listeners.length === 0) {
     throw new Error('startAgentSessionRun requires at least one listener')
@@ -57,7 +58,8 @@ export async function startAgentSessionRun(input: {
       trigger: 'submit-message',
       topicId,
       userMessageParts: input.userParts,
-      headless: input.headless === true
+      headless: input.headless === true,
+      fastMode: input.fastMode === true
     })
 
     manager.send({
