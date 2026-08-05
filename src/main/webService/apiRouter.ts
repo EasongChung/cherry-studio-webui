@@ -328,7 +328,10 @@ const parseToolApprovalBody = (value: unknown): WebUiToolApprovalBody | undefine
 
 const listWebUiChatModelGroups = () => {
   // WebUI desktop bridge
-  const providers = providerService.list({ enabled: true }).filter((provider) => !isExternalCliProvider(provider))
+  // Agent sessions may target agent-only providers (e.g. `claude-code`, whose credentials
+  // come from an external CLI login), so keep them here — the desktop agent model picker
+  // surfaces them too via `useAgentModelFilter`.
+  const providers = providerService.list({ enabled: true })
   const providerById = new Map(providers.map((provider) => [provider.id, provider]))
   const models = modelService
     .list({ enabled: true })

@@ -1113,9 +1113,12 @@
     --context-color: #ef4444;
   }
 
+  /* No usage yet: keep the ring visible as a neutral track instead of a flat disc. */
   .context-orb-empty {
+    --context-color: #cbd5e1;
     color: #94a3b8;
-    background: radial-gradient(circle at center, #ffffff 62%, transparent 64%), #e2e8f0;
+    background: radial-gradient(circle at center, #ffffff 62%, transparent 64%),
+      conic-gradient(#cbd5e1 360deg, #cbd5e1 0);
   }
 
   .agent-status-shortcut-wrap {
@@ -3842,6 +3845,17 @@
     z-index: 40;
   }
 
+  /* Anchor for the trailing quick-panel trigger; keeps the panel out of the
+     horizontally scrollable tool strip so it is never clipped. */
+  .composer-tools-quick-panel-slot {
+    display: flex;
+    position: sticky;
+    right: 0;
+    flex: 0 0 auto;
+    align-items: center;
+    margin-left: auto;
+  }
+
   .quick-panel {
     position: absolute;
     bottom: calc(100% + 4px);
@@ -3853,6 +3867,12 @@
     border: 1px solid #e5e7eb;
     border-radius: 8px;
     box-shadow: 0 4px 12px rgba(0, 0, 0, 0.12);
+  }
+
+  /* Right-edge trigger: open leftwards so the panel stays inside the composer. */
+  .quick-panel-end {
+    left: auto;
+    right: 0;
   }
 
   .quick-panel-title {
@@ -4735,7 +4755,9 @@
     }
 
     .context-orb-empty {
-      background: radial-gradient(circle at center, #111827 62%, transparent 64%), #475569;
+      --context-color: #64748b;
+      background: radial-gradient(circle at center, #111827 62%, transparent 64%),
+        conic-gradient(#64748b 360deg, #64748b 0);
     }
 
     .agent-status-hover-card .agent-status-section h3,
@@ -6044,6 +6066,12 @@
       conic-gradient(var(--context-color) var(--context-usage), #475569 0);
   }
 
+  :root[data-webui-theme='dark'] .context-orb-empty {
+    --context-color: #64748b;
+    background: radial-gradient(circle at center, #111827 62%, transparent 64%),
+      conic-gradient(#64748b 360deg, #64748b 0);
+  }
+
   :root[data-webui-theme='dark'] .conversation-greeting-title {
     color: #f1f5f9;
   }
@@ -6075,4 +6103,11 @@
     color: #334155;
     background: radial-gradient(circle at center, #ffffff 62%, transparent 64%),
       conic-gradient(var(--context-color) var(--context-usage), #e2e8f0 0);
+  }
+
+  :root[data-webui-theme='light'] .context-orb-empty {
+    --context-color: #cbd5e1;
+    color: #94a3b8;
+    background: radial-gradient(circle at center, #ffffff 62%, transparent 64%),
+      conic-gradient(#cbd5e1 360deg, #cbd5e1 0);
   }

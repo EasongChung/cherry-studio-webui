@@ -5236,91 +5236,6 @@ const App = defineComponent({
                       ),
                       h('div', { class: 'composer-toolbar' }, [
                         h('div', { class: 'composer-tools' }, [
-                          // Quick-panel trigger: opens the tool picker for customizing pinned tools.
-                          h(
-                            'button',
-                            {
-                              class: ['composer-tool-button', { 'composer-tool-button-active': quickPanelOpen.value }],
-                              type: 'button',
-                              title: text('quickPanel'),
-                              'aria-label': text('quickPanel'),
-                              'aria-expanded': quickPanelOpen.value,
-                              onClick: () => {
-                                quickPanelOpen.value = !quickPanelOpen.value
-                                modelPickerOpen.value = false
-                                reasoningPickerOpen.value = false
-                                permissionModePickerOpen.value = false
-                                skillPickerOpen.value = false
-                                kbPickerOpen.value = false
-                              }
-                            },
-                            h('span', { class: 'quick-panel-trigger-icon' }, '+')
-                          ),
-                          ...chatInputPinnedTools.value.map((toolId) =>
-                            h(
-                              'button',
-                              {
-                                class: 'composer-tool-button',
-                                type: 'button',
-                                key: toolId,
-                                disabled: !selectedConversation.value,
-                                title: text('quickPanelTool'),
-                                'aria-label': toolId,
-                                onClick: () => {
-                                  // Delegate to the matching hardcoded handler.
-                                  if (toolId === 'composer:new-conversation') void openNewConversation()
-                                  else if (toolId === 'web-search') {
-                                    composerText.value = `${composerText.value}/web-search `.trimStart()
-                                  }
-                                }
-                              },
-                              renderComposerToolIcon(
-                                toolId === 'composer:new-conversation' ? 'newConversation' : 'knowledge'
-                              )
-                            )
-                          ),
-                          // Quick-panel overlay
-                          quickPanelOpen.value
-                            ? h('div', {
-                                class: 'quick-panel-overlay',
-                                onClick: () => {
-                                  quickPanelOpen.value = false
-                                }
-                              })
-                            : undefined,
-                          quickPanelOpen.value
-                            ? h('div', { class: 'quick-panel' }, [
-                                h('p', { class: 'quick-panel-title' }, text('quickPanel')),
-                                h('div', { class: 'quick-panel-items' }, [
-                                  ...(
-                                    [
-                                      { id: 'composer:new-conversation', labelKey: 'newConversationTool' as const },
-                                      { id: 'web-search', labelKey: 'knowledgeSearch' as const }
-                                    ] as const
-                                  ).map((item) => {
-                                    const isPinned = chatInputPinnedTools.value.includes(item.id)
-                                    return h(
-                                      'button',
-                                      {
-                                        class: ['quick-panel-item', { 'quick-panel-item-pinned': isPinned }],
-                                        type: 'button',
-                                        key: item.id,
-                                        onClick: () => {
-                                          const next = isPinned
-                                            ? chatInputPinnedTools.value.filter((id) => id !== item.id)
-                                            : [...chatInputPinnedTools.value, item.id]
-                                          void savePinnedTools(next)
-                                        }
-                                      },
-                                      [
-                                        h('span', { class: 'quick-panel-item-icon' }, isPinned ? '✓' : ''),
-                                        h('span', { class: 'quick-panel-item-label' }, text(item.labelKey))
-                                      ]
-                                    )
-                                  })
-                                ])
-                              ])
-                            : undefined,
                           h(
                             'button',
                             {
@@ -5477,7 +5392,76 @@ const App = defineComponent({
                               }
                             },
                             renderComposerToolIcon('fastMode')
-                          )
+                          ),
+                          // Quick-panel lives at the toolbar's right edge; its pinned tools stay
+                          // inside the panel so the toolbar itself does not grow.
+                          h('div', { class: 'composer-tools-quick-panel-slot' }, [
+                            h(
+                              'button',
+                              {
+                                class: [
+                                  'composer-tool-button',
+                                  { 'composer-tool-button-active': quickPanelOpen.value }
+                                ],
+                                type: 'button',
+                                title: text('quickPanel'),
+                                'aria-label': text('quickPanel'),
+                                'aria-expanded': quickPanelOpen.value,
+                                onClick: () => {
+                                  quickPanelOpen.value = !quickPanelOpen.value
+                                  modelPickerOpen.value = false
+                                  reasoningPickerOpen.value = false
+                                  permissionModePickerOpen.value = false
+                                  skillPickerOpen.value = false
+                                  kbPickerOpen.value = false
+                                }
+                              },
+                              h('span', { class: 'quick-panel-trigger-icon' }, '+')
+                            ),
+                            quickPanelOpen.value
+                              ? h('div', {
+                                  class: 'quick-panel-overlay',
+                                  onClick: () => {
+                                    quickPanelOpen.value = false
+                                  }
+                                })
+                              : undefined,
+                            quickPanelOpen.value
+                              ? h('div', { class: 'quick-panel quick-panel-end' }, [
+                                  h('p', { class: 'quick-panel-title' }, text('quickPanel')),
+                                  h(
+                                    'div',
+                                    { class: 'quick-panel-items' },
+                                    (
+                                      [
+                                        { id: 'composer:new-conversation', labelKey: 'newConversationTool' as const },
+                                        { id: 'web-search', labelKey: 'knowledgeSearch' as const }
+                                      ] as const
+                                    ).map((item) => {
+                                      const isPinned = chatInputPinnedTools.value.includes(item.id)
+                                      return h(
+                                        'button',
+                                        {
+                                          class: ['quick-panel-item', { 'quick-panel-item-pinned': isPinned }],
+                                          type: 'button',
+                                          key: item.id,
+                                          onClick: () => {
+                                            const next = isPinned
+                                              ? chatInputPinnedTools.value.filter((id) => id !== item.id)
+                                              : [...chatInputPinnedTools.value, item.id]
+                                            void savePinnedTools(next)
+                                          }
+                                        },
+                                        [
+                                          h('span', { class: 'quick-panel-item-icon' }, isPinned ? '✓' : ''),
+                                          h('span', { class: 'quick-panel-item-label' }, text(item.labelKey))
+                                        ]
+                                      )
+                                    })
+                                  )
+                                ])
+                              : undefined
+                          ])
                         ]),
                         h(
                           'button',
