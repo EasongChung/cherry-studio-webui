@@ -2720,6 +2720,54 @@
     margin-bottom: 8px;
   }
 
+  .tool-call-group {
+    margin: 0 0 10px;
+    border: 1px solid #e5e7eb;
+    border-radius: 6px;
+    overflow: hidden;
+  }
+
+  .tool-call-group summary {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    min-height: 36px;
+    padding: 0 10px;
+    cursor: pointer;
+    list-style: none;
+    background: #f9fafb;
+  }
+
+  .tool-call-group summary::-webkit-details-marker {
+    display: none;
+  }
+
+  .tool-call-group-indicator {
+    width: 8px;
+    height: 8px;
+    flex: 0 0 auto;
+    background: #6b7280;
+    border-radius: 999px;
+  }
+
+  .tool-call-group-pending .tool-call-group-indicator {
+    background: #d97706;
+    animation: pulse 1s ease-in-out infinite;
+  }
+
+  .tool-call-group-summary {
+    font-size: 13px;
+    font-weight: 600;
+    color: #374151;
+  }
+
+  .tool-call-group > .tool-call {
+    margin: 0;
+    border: none;
+    border-top: 1px solid #e5e7eb;
+    border-radius: 0;
+  }
+
   .tool-call {
     margin: 0 0 10px;
     color: #374151;
@@ -4855,6 +4903,7 @@
   :root[data-webui-theme='dark'] .help-guide-tree,
   :root[data-webui-theme='dark'] .process-block,
   :root[data-webui-theme='dark'] .tool-call,
+  :root[data-webui-theme='dark'] .tool-call-group,
   :root[data-webui-theme='dark'] .reasoning-block,
   :root[data-webui-theme='dark'] .markdown-content th,
   :root[data-webui-theme='dark'] .secondary-button,
@@ -4879,6 +4928,14 @@
 
   :root[data-webui-theme='dark'] .process-preview-sliver {
     color: #94a3b8;
+  }
+
+  :root[data-webui-theme='dark'] .tool-call-group-summary {
+    color: #e5e7eb;
+  }
+
+  :root[data-webui-theme='dark'] .tool-call-group summary {
+    background: #273449;
   }
 
   :root[data-webui-theme='dark'] .mobile-header-picker-group-title {

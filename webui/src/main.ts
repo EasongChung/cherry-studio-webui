@@ -96,6 +96,7 @@ import {
   persistCollapsedWorkdirGroups,
   readFileAsDataUrl,
   resolveWorkspaceSeedFromConversation,
+  terminalToolStates,
   toConversationSummary,
   toDisplayText,
   toErrorMessage,
@@ -896,6 +897,13 @@ const App = defineComponent({
       if (message.status !== 'pending' && message.processingTimeMs) {
         return `${text('processingTime')} ${formatDuration(message.processingTimeMs)}`
       }
+      // Streaming state: mirror the desktop ThinkingBlock, which shows a live
+      // "thinking" label while reasoning is in progress and a stable label once finished.
+      if (message.status === 'pending') {
+        if (message.toolCalls?.length)
+          return `${text('processDetails')} · ${message.toolCalls.length} ${text('toolCalls')}`
+        if (message.reasoning) return text('thinkingLive')
+      }
       if (message.toolCalls?.length)
         return `${text('processDetails')} · ${message.toolCalls.length} ${text('toolCalls')}`
       return text('reasoning')
@@ -1073,20 +1081,41 @@ const App = defineComponent({
               ])
             : undefined,
           message.toolCalls?.length
-            ? h('section', { class: 'process-section' }, [
-                h('p', { class: 'process-section-title' }, `${text('toolCalls')} (${message.toolCalls.length})`),
-                ...message.toolCalls.map((tool) =>
-                  h(ToolCallBlock, {
-                    tool,
-                    message,
-                    text,
-                    submitting: isApprovalSubmitting(message.id, tool.id),
-                    approvalError: approvalErrorByKey.value[approvalKey(message.id, tool.id)],
-                    onApprove: () => void respondToolApproval(tool, message, true),
-                    onDeny: () => void respondToolApproval(tool, message, false)
-                  })
+            ? (() => {
+                const terminal = terminalToolStates
+                const activeTool = [...message.toolCalls]
+                  .reverse()
+                  .find((t: WebUiToolCallSnapshot) => !terminal.has(t.state))
+                const isStreaming = message.status === 'pending'
+                const groupSummary =
+                  isStreaming && activeTool
+                    ? `${text('toolRunning')} ${activeTool.name}`
+                    : `${text('toolCalls')} (${message.toolCalls.length})`
+                return h(
+                  'details',
+                  {
+                    class: ['tool-call-group', { 'tool-call-group-pending': isStreaming }],
+                    ...(isStreaming ? { open: true } : {})
+                  },
+                  [
+                    h('summary', [
+                      h('span', { class: 'tool-call-group-indicator', 'aria-hidden': 'true' }),
+                      h('span', { class: 'tool-call-group-summary' }, groupSummary)
+                    ]),
+                    ...message.toolCalls.map((tool) =>
+                      h(ToolCallBlock, {
+                        tool,
+                        message,
+                        text,
+                        submitting: isApprovalSubmitting(message.id, tool.id),
+                        approvalError: approvalErrorByKey.value[approvalKey(message.id, tool.id)],
+                        onApprove: () => void respondToolApproval(tool, message, true),
+                        onDeny: () => void respondToolApproval(tool, message, false)
+                      })
+                    )
+                  ]
                 )
-              ])
+              })()
             : undefined
         ]
       )
