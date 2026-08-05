@@ -428,6 +428,13 @@ const App = defineComponent({
     const modelPickerLabel = computed(
       () => selectedModel.value?.name ?? selectedAgent.value?.modelName ?? selectedAgent.value?.model ?? text('agent')
     )
+    /**
+     * Whether the currently selected conversation already has any message(s).
+     * Mirrors the desktop UX: once a session has messages, its agent and workspace
+     * bindings are locked (only the model stays switchable). Empty / brand-new
+     * sessions keep all three pickers operable.
+     */
+    const sessionHasMessages = computed(() => (selectedConversation.value ? messages.value.length > 0 : false))
     const contextUsagePercentage = computed(() => {
       if (!contextUsage.value?.maxTokens) return undefined
       return Math.min(100, Math.round((contextUsage.value.totalTokens / contextUsage.value.maxTokens) * 100))
@@ -4114,6 +4121,7 @@ const App = defineComponent({
             type: 'button',
             role: 'option',
             'aria-selected': agent.id === selectedConversation.value?.agentId,
+            disabled: sessionHasMessages.value,
             onClick: () => void updateSessionAgent(agent.id)
           },
           [
@@ -4173,6 +4181,7 @@ const App = defineComponent({
             type: 'button',
             role: 'option',
             'aria-selected': !selectedConversation.value?.workspaceId,
+            disabled: sessionHasMessages.value,
             onClick: () => void updateSessionWorkspace(null)
           },
           [h('span', { class: 'chat-header-picker-option-name' }, text('noProject'))]
@@ -4189,6 +4198,7 @@ const App = defineComponent({
               type: 'button',
               role: 'option',
               'aria-selected': ws.id === selectedConversation.value?.workspaceId,
+              disabled: sessionHasMessages.value,
               onClick: () => void updateSessionWorkspace(ws.id)
             },
             [
@@ -4212,7 +4222,7 @@ const App = defineComponent({
               title: `${text('switchAgent')}: ${selectedAgentName.value ?? text('selectAgent')}`,
               'aria-label': text('switchAgent'),
               'aria-expanded': agentPickerOpen.value,
-              disabled: agentUpdateState.value === 'updating',
+              disabled: agentUpdateState.value === 'updating' || sessionHasMessages.value,
               onClick: () => {
                 agentPickerOpen.value = !agentPickerOpen.value
                 modelPickerOpen.value = false
@@ -4268,7 +4278,7 @@ const App = defineComponent({
               title: text('workspace'),
               'aria-label': text('workspace'),
               'aria-expanded': workspacePickerOpen.value,
-              disabled: workspaceUpdateState.value === 'updating',
+              disabled: workspaceUpdateState.value === 'updating' || sessionHasMessages.value,
               onClick: () => {
                 workspacePickerOpen.value = !workspacePickerOpen.value
                 if (workspacePickerOpen.value && !workspaces.value.length) {
