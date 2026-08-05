@@ -797,15 +797,46 @@ export const createWebUiApiRouter = ({
     }
 
     if (pathname === webUiPreferencesPath) {
-      if (method !== 'GET') return methodNotAllowed(['GET'])
-
-      return {
-        status: 200,
-        body: {
-          showEstimatedTokens: Boolean(application.get('PreferenceService').get('chat.input.show_estimated_tokens')),
-          thoughtAutoCollapse: Boolean(application.get('PreferenceService').get('chat.message.thought.auto_collapse'))
+      if (method === 'GET') {
+        const prefService = application.get('PreferenceService')
+        return {
+          status: 200,
+          body: {
+            showEstimatedTokens: Boolean(prefService.get('chat.input.show_estimated_tokens')),
+            thoughtAutoCollapse: Boolean(prefService.get('chat.message.thought.auto_collapse')),
+            chatInputPinnedTools: prefService.get<string[]>('chat.input.toolbar.pinned_tools') ?? [
+              'composer:new-conversation',
+              'web-search'
+            ],
+            agentInputPinnedTools: prefService.get<string[]>('agent.input.toolbar.pinned_tools') ?? [
+              'composer:new-session',
+              'skills'
+            ]
+          }
         }
       }
+
+      if (method === 'PUT') {
+        const body = await readJsonBody(request)
+        if (!body || typeof body !== 'object')
+          return { status: 400, body: { code: 'WEBUI_INVALID_BODY', message: 'Request body must be a JSON object' } }
+
+        const prefService = application.get('PreferenceService')
+        const candidate = body as Record<string, unknown>
+
+        if (candidate.showEstimatedTokens !== undefined)
+          prefService.set('chat.input.show_estimated_tokens', Boolean(candidate.showEstimatedTokens))
+        if (candidate.thoughtAutoCollapse !== undefined)
+          prefService.set('chat.message.thought.auto_collapse', Boolean(candidate.thoughtAutoCollapse))
+        if (Array.isArray(candidate.chatInputPinnedTools))
+          prefService.set('chat.input.toolbar.pinned_tools', candidate.chatInputPinnedTools)
+        if (Array.isArray(candidate.agentInputPinnedTools))
+          prefService.set('agent.input.toolbar.pinned_tools', candidate.agentInputPinnedTools)
+
+        return { status: 200, body: { ok: true } }
+      }
+
+      return methodNotAllowed(['GET', 'PUT'])
     }
 
     if (contextUsageMatch) {

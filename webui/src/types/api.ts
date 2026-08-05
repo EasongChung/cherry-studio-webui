@@ -197,6 +197,10 @@ export type WebUiPreferencesResponse = {
   readonly showEstimatedTokens: boolean
   /** Mirrors desktop `chat.message.thought.auto_collapse` — keeps WebUI thinking blocks folded on stream. */
   readonly thoughtAutoCollapse: boolean
+  /** Ordered list of pinned tool ids for the chat composer toolbar (mirrors `chat.input.toolbar.pinned_tools`). */
+  readonly chatInputPinnedTools: readonly string[]
+  /** Ordered list of pinned tool ids for the agent composer toolbar (mirrors `agent.input.toolbar.pinned_tools`). */
+  readonly agentInputPinnedTools: readonly string[]
 }
 
 export type WebUiSseEventName = 'ready' | 'chunk' | 'sync' | 'error' | 'done'

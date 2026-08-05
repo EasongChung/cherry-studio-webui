@@ -3783,6 +3783,7 @@
 
   .composer-tools {
     display: flex;
+    position: relative;
     min-width: 0;
     gap: 4px;
     align-items: center;
@@ -3827,6 +3828,79 @@
   .composer-tool-button-caution {
     color: #7c3aed;
     background: #f5f3ff;
+  }
+
+  .quick-panel-trigger-icon {
+    font-size: 18px;
+    font-weight: 700;
+    line-height: 1;
+  }
+
+  .quick-panel-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 40;
+  }
+
+  .quick-panel {
+    position: absolute;
+    bottom: calc(100% + 4px);
+    left: 0;
+    z-index: 50;
+    min-width: 200px;
+    padding: 8px;
+    background: #ffffff;
+    border: 1px solid #e5e7eb;
+    border-radius: 8px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.12);
+  }
+
+  .quick-panel-title {
+    margin: 0 0 6px;
+    font-size: 12px;
+    font-weight: 600;
+    color: #6b7280;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+
+  .quick-panel-items {
+    display: grid;
+    gap: 2px;
+  }
+
+  .quick-panel-item {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    width: 100%;
+    padding: 6px 8px;
+    font-size: 13px;
+    color: #374151;
+    text-align: left;
+    background: none;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+  }
+
+  .quick-panel-item:hover,
+  .quick-panel-item:focus-visible {
+    background: #f1f5f9;
+  }
+
+  .quick-panel-item-pinned {
+    font-weight: 600;
+    color: #2563eb;
+  }
+
+  .quick-panel-item-icon {
+    display: grid;
+    place-items: center;
+    width: 16px;
+    height: 16px;
+    font-size: 12px;
+    font-weight: 700;
   }
 
   .send-button {
@@ -5076,6 +5150,28 @@
   :root[data-webui-theme='dark'] .composer-tool-button-caution {
     color: #c4b5fd;
     background: #2e1065;
+  }
+
+  :root[data-webui-theme='dark'] .quick-panel {
+    background: #273449;
+    border-color: #475569;
+  }
+
+  :root[data-webui-theme='dark'] .quick-panel-title {
+    color: #94a3b8;
+  }
+
+  :root[data-webui-theme='dark'] .quick-panel-item {
+    color: #e5e7eb;
+  }
+
+  :root[data-webui-theme='dark'] .quick-panel-item:hover,
+  :root[data-webui-theme='dark'] .quick-panel-item:focus-visible {
+    background: #334155;
+  }
+
+  :root[data-webui-theme='dark'] .quick-panel-item-pinned {
+    color: #93c5fd;
   }
 
   :root[data-webui-theme='dark'] .permission-mode-option-caution .permission-mode-option-title {
