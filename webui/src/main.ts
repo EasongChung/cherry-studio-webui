@@ -202,6 +202,9 @@ const App = defineComponent({
     const quickPanelOpen = ref(false)
     /** Points at the rolling reasoning sliver of the currently-streaming message, for `scrollLeft` updates. */
     const activeThinkingPreview = ref<HTMLElement | null>(null)
+    /** Re-renders active process elapsed time once per second, matching desktop live progress. */
+    const processElapsedTick = ref(0)
+    let processElapsedTimer: number | undefined
     /** Per-message user open/close intent for the process block, overriding auto-open from the preference. */
     const processOpenOverrides = ref<Map<string, boolean>>(new Map())
     const userName = ref('')
@@ -904,15 +907,15 @@ const App = defineComponent({
     const hasProcessDetails = (message: WebUiMessageSnapshot) =>
       Boolean(message.processGroups?.length || message.reasoning || message.toolCalls?.length)
     const getProcessSummary = (message: WebUiMessageSnapshot) => {
+      processElapsedTick.value
       if (message.status !== 'pending' && message.processingTimeMs) {
         return `${text('processingTime')} ${formatDuration(message.processingTimeMs)}`
       }
-      // Streaming state: mirror the desktop ThinkingBlock, which shows a live
-      // "thinking" label while reasoning is in progress and a stable label once finished.
+      // Match desktop live progress: keep one stable process label and append elapsed time while streaming.
       if (message.status === 'pending') {
-        if (message.toolCalls?.length)
-          return `${text('processDetails')} · ${message.toolCalls.length} ${text('toolCalls')}`
-        if (message.reasoning) return text('thinkingLive')
+        const startedAt = Date.parse(message.createdAt)
+        const elapsed = Number.isFinite(startedAt) ? formatDuration(Math.max(0, Date.now() - startedAt)) : undefined
+        return elapsed ? `${text('processDetails')} · ${elapsed}` : text('processDetails')
       }
       if (message.toolCalls?.length)
         return `${text('processDetails')} · ${message.toolCalls.length} ${text('toolCalls')}`
@@ -4114,6 +4117,9 @@ const App = defineComponent({
 
     onMounted(() => {
       applyThemeMode()
+      processElapsedTimer = window.setInterval(() => {
+        if (isCurrentlyStreaming.value) processElapsedTick.value += 1
+      }, 1000)
       void loadAuthStatus()
       refreshSpeechVoices()
       if (typeof window !== 'undefined' && window.speechSynthesis) {
@@ -4172,6 +4178,7 @@ const App = defineComponent({
       releaseWorkspacePreview()
       if (healthTimer) window.clearInterval(healthTimer)
       if (contextUsageTimer) window.clearInterval(contextUsageTimer)
+      if (processElapsedTimer !== undefined) window.clearInterval(processElapsedTimer)
       if (syncTimer) window.clearTimeout(syncTimer)
       if (streamRefreshTimer !== undefined) window.clearTimeout(streamRefreshTimer)
       if (chunkFrame !== undefined) window.cancelAnimationFrame(chunkFrame)
