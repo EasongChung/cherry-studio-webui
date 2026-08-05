@@ -6,9 +6,7 @@ import type { ResourcePaneConfig, ResourcePaneCountButtonProps } from '@renderer
 import { AgentResourceList } from '@renderer/components/chat/resourceList/AgentResourceList'
 import type { ResourceListRevealRequest } from '@renderer/components/chat/resourceList/base'
 import { ConversationSidebarToggleButton } from '@renderer/components/chat/shell/ConversationSidebarToggleButton'
-import { writeAgentDraftCache } from '@renderer/components/composer/variants/agent/agentDraftCache'
 import type { AgentComposerLaunchOptions } from '@renderer/components/composer/variants/AgentComposer'
-import { agentSkillToComposerToken } from '@renderer/components/composer/variants/agentComposerTokens'
 import {
   createRecentSessionEntryFromSession,
   recordGlobalSearchRecentEntry
@@ -22,7 +20,7 @@ import HistoryRecordsView from '@renderer/components/history/HistoryRecordsView'
 import { ConversationResourceView } from '@renderer/components/resourceCatalog/conversation'
 import { usePersistCache } from '@renderer/data/hooks/useCache'
 import { useInvalidateCache } from '@renderer/data/hooks/useDataApi'
-import { useAgent, useAgents } from '@renderer/hooks/agent/useAgent'
+import { useAgents } from '@renderer/hooks/agent/useAgent'
 import { useActiveSession, useLatestSession, useSession, useUpdateSession } from '@renderer/hooks/agent/useSession'
 import { useCommandHandler } from '@renderer/hooks/command'
 import { useAgentSessionsSource } from '@renderer/hooks/resourceViewSources'
@@ -39,7 +37,6 @@ import {
   useConversationCenterSurface
 } from '@renderer/hooks/useConversationCenterSurface'
 import { useConversationShellPaneState } from '@renderer/hooks/useConversationShellPaneState'
-import { useModelById } from '@renderer/hooks/useModel'
 import { ipcApi } from '@renderer/ipc'
 import { EVENT_NAMES, EventEmitter } from '@renderer/services/EventService'
 import type { ResourceListRevealPayload } from '@renderer/services/resourceListRevealEvents'
@@ -55,7 +52,6 @@ import type { AgentSessionEntity } from '@shared/data/api/schemas/agentSessions'
 import { AGENT_WORKSPACE_TYPE, type AgentSessionWorkspaceSource } from '@shared/data/api/schemas/agentWorkspaces'
 import type { CursorPaginationResponse } from '@shared/data/api/types'
 import type { TopicTabPosition } from '@shared/data/preference/preferenceTypes'
-import type { LocalSkill } from '@shared/types/skill'
 import { MIN_WINDOW_HEIGHT, SECOND_MIN_WINDOW_WIDTH } from '@shared/utils/window'
 import { useNavigate, useSearch } from '@tanstack/react-router'
 import { Bot } from 'lucide-react'
@@ -68,58 +64,21 @@ import AgentSidePanel from './AgentSidePanel'
 import { AgentCreateDialog } from './components/AgentCreateDialog'
 import type { AgentFileNavigationRequest } from './components/AgentRightPane'
 import Sessions from './components/Sessions'
+import {
+  clearFeedbackComposerLaunch,
+  FEEDBACK_INTENT_GUARD_TTL_MS,
+  type FeedbackComposerLaunch,
+  getFeedbackIntentGuardCacheKey,
+  persistFeedbackComposerLaunch,
+  readFeedbackComposerLaunch
+} from './feedbackComposerLaunch'
 import { parseAgentRouteSearch } from './routeSearch'
 import type { CreateAgentSessionDefaults } from './types'
+import { useAgentConversationBootstrap } from './useAgentConversationBootstrap'
 
 const logger = loggerService.withContext('AgentPage')
 type AgentConversationResourceKind = 'agent'
 const MAX_REUSABLE_EMPTY_MESSAGE_CHECKS = 8
-const FEEDBACK_SKILL = { name: 'issue-reporter', filename: 'issue-reporter' } satisfies LocalSkill
-const FEEDBACK_DRAFT_TEXT = 'Use the issue-reporter skill.'
-const FEEDBACK_LAUNCH_TTL_MS = 24 * 60 * 60 * 1000
-const FEEDBACK_INTENT_GUARD_TTL_MS = 5 * 60 * 1000
-
-type FeedbackComposerLaunch = Omit<AgentComposerLaunchOptions, 'onSent'> & { sessionId: string }
-
-export function getFeedbackDraftCacheKey(sessionId: string): string {
-  return `agent-feedback-draft-${sessionId}`
-}
-
-function getFeedbackLaunchCacheKey(sessionId: string): string {
-  return `agent-feedback-launch-${sessionId}`
-}
-
-function getFeedbackIntentGuardCacheKey(tabId: string): string {
-  return `agent-feedback-intent-${tabId}`
-}
-
-export function createFeedbackComposerDraft(): AgentComposerLaunchOptions['initialDraft'] {
-  const skillToken = agentSkillToComposerToken(FEEDBACK_SKILL)
-  return {
-    text: FEEDBACK_DRAFT_TEXT,
-    tokens: [{ ...skillToken, index: 0, textOffset: 0 }]
-  }
-}
-
-function persistFeedbackComposerLaunch(sessionId: string): FeedbackComposerLaunch {
-  const launch = {
-    sessionId,
-    draftCacheKey: getFeedbackDraftCacheKey(sessionId),
-    initialDraft: createFeedbackComposerDraft()
-  }
-  writeAgentDraftCache(launch.draftCacheKey, launch.initialDraft.text, launch.initialDraft.tokens)
-  cacheService.setCasual(getFeedbackLaunchCacheKey(sessionId), launch, FEEDBACK_LAUNCH_TTL_MS)
-  return launch
-}
-
-function readFeedbackComposerLaunch(sessionId: string): FeedbackComposerLaunch | null {
-  const launch = cacheService.getCasual<FeedbackComposerLaunch>(getFeedbackLaunchCacheKey(sessionId))
-  return launch?.sessionId === sessionId ? launch : null
-}
-
-function clearFeedbackComposerLaunch(launch: FeedbackComposerLaunch): void {
-  cacheService.deleteCasual(getFeedbackLaunchCacheKey(launch.sessionId))
-}
 
 function isUserWorkspaceSession(session: AgentSessionEntity | null | undefined): boolean {
   return !!session?.workspaceId && session.workspace?.type !== 'system'
@@ -222,11 +181,12 @@ const AgentPage = () => {
   const navigate = useNavigate()
   const isFeedbackIntent = routeSearch.intent === 'feedback'
   const currentTab = useCurrentTab()
+  const isActiveTab = useIsActiveTab()
+  const currentTabId = useCurrentTabId()
   const routeSessionId = routeSearch.sessionId
   const tabMetadataSessionId = currentTab ? getTabInstanceKey(currentTab, 'agents') : undefined
   const isMessageOnlyView = routeSearch.view === 'message' && !!routeSessionId
-  const routeActiveSessionId =
-    isMessageOnlyView || isFeedbackIntent ? null : (routeSessionId ?? tabMetadataSessionId ?? null)
+  const routeActiveSessionId = isMessageOnlyView ? null : (routeSessionId ?? tabMetadataSessionId ?? null)
   // Shared full-list source for the session UI and the composer reuse path. Reuse must read this
   // upper-layer data instead of issuing a second ad-hoc full pagination request.
   const agentSessionsSource = useAgentSessionsSource()
@@ -308,6 +268,10 @@ const AgentPage = () => {
   const invalidateCache = useInvalidateCache()
   const closeConversationTabs = useCloseConversationTabs()
   const { setSessionWorkspace } = useUpdateSession()
+  const initialActiveSession = useMemo(
+    () => (activeSessionId ? agentSessions.find((session) => session.id === activeSessionId) : undefined),
+    [activeSessionId, agentSessions]
+  )
   const {
     session: activeSession,
     isLoading: isActiveSessionLoading,
@@ -319,15 +283,21 @@ const AgentPage = () => {
     setPendingSession
   } = useActiveSession({
     activeSessionId,
-    setActiveSessionId
+    setActiveSessionId,
+    initialSession: initialActiveSession
   })
   const lastVisibleSessionRef = useRef<AgentSessionEntity | null>(null)
   const visibleSession = isMessageOnlyView
     ? routeSession
     : (activeSession ?? (isActiveSessionLoading ? lastVisibleSessionRef.current : null))
   const visibleAgentFromList = agents.find((agent) => agent.id === visibleSession?.agentId)
-  // Start the managed model query before agent details resolve; AgentChat shares the same SWR request.
-  useModelById(visibleAgentFromList?.model)
+  const conversationBootstrap = useAgentConversationBootstrap({
+    session: visibleSession ?? null,
+    sessionLoading: isMessageOnlyView ? isRouteSessionLoading : isActiveSessionLoading,
+    sessionSource: isMessageOnlyView && routeSession ? 'query' : isMessageOnlyView ? 'none' : activeSessionSource,
+    agentHint: visibleAgentFromList
+  })
+  const visibleAgent = conversationBootstrap.resources.agent
   const fileNavigationRequestRef = useRef<AgentFileNavigationRequest | null>(null)
   const handleFileNavigationRequestChange = useCallback((request: AgentFileNavigationRequest | null) => {
     fileNavigationRequestRef.current = request
@@ -371,9 +341,6 @@ const AgentPage = () => {
   })
   // All non-dormant tabs mount at once (Activity keep-alive), so each agent tab runs its
   // own AgentPage. `useIsActiveTab` answers "am I the globally-focused tab" (gates last_used).
-  const isActiveTab = useIsActiveTab()
-  const currentTabId = useCurrentTabId()
-
   const clearSessionRevealRequestAfterPaint = useCallback((requestId: number) => {
     const clear = () => {
       setSessionRevealRequest((current) => (current?.requestId === requestId ? undefined : current))
@@ -410,7 +377,6 @@ const AgentPage = () => {
   }, [currentTabId])
   // Label this tab with its agent emoji + session name so multiple agent tabs
   // are distinguishable (every tab labels itself — not gated on active).
-  const { agent: visibleAgent } = useAgent(visibleSession?.agentId ?? null)
   const tabInstanceSessionId = !isMessageOnlyView
     ? (visibleSession?.id ?? routeActiveSessionId ?? undefined)
     : undefined
@@ -556,15 +522,13 @@ const AgentPage = () => {
         const workspaceSource = await resolveCreateWorkspaceSource(defaults, visibleSession)
         // Drop the session being replaced (post-delete): a stale candidate list still holds it, and
         // reusing it would reactivate the just-deleted session instead of opening a fresh one.
-        const reuseCandidates = defaults.forceNewSession
-          ? []
-          : getSessionReuseCandidates().filter((candidate) => candidate.id !== defaults.excludeReuseSessionId)
-        const reusableSessions = defaults.forceNewSession
-          ? []
-          : await findReusableEmptySessions(
-              reuseCandidates,
-              (candidate) => candidate.agentId === agentId && sessionMatchesWorkspaceSource(candidate, workspaceSource)
-            )
+        const reuseCandidates = getSessionReuseCandidates().filter(
+          (candidate) => candidate.id !== defaults.excludeReuseSessionId
+        )
+        const reusableSessions = await findReusableEmptySessions(
+          reuseCandidates,
+          (candidate) => candidate.agentId === agentId && sessionMatchesWorkspaceSource(candidate, workspaceSource)
+        )
         const reusableSession = reusableSessions[0]
         const duplicateEmptySystemSessionIds =
           workspaceSource.type === AGENT_WORKSPACE_TYPE.SYSTEM
@@ -593,11 +557,7 @@ const AgentPage = () => {
         return session
       } catch (err) {
         logger.error('Failed to create empty agent session', err as Error, { agentId })
-        toast.error(
-          defaults.forceNewSession
-            ? t('settings.about.feedback.agent_error')
-            : formatErrorMessageWithPrefix(err, t('agent.session.create.error.failed'))
-        )
+        toast.error(formatErrorMessageWithPrefix(err, t('agent.session.create.error.failed')))
         return null
       } finally {
         isCreatingEmptySessionRef.current = false
@@ -825,37 +785,31 @@ const AgentPage = () => {
     setFeedbackComposerLaunch(null)
     closeSurface()
     setPendingLocateMessageId(undefined)
-    clearActiveSession()
     setMissingAgentSelection(false)
 
     try {
-      const assistant = await ipcApi.request('ai.agent.builtin_assistant.ensure')
+      if (!routeSessionId) {
+        throw new Error('Feedback intent is missing its prepared session')
+      }
       try {
-        await invalidateCache(['/agents', `/agents/${assistant.id}`])
+        await invalidateCache(['/agents', '/agent-sessions', `/agent-sessions/${routeSessionId}`])
       } catch (err) {
-        logger.warn('Failed to refresh Agent cache after restoring Cherry Assistant', err as Error, {
-          agentId: assistant.id
+        logger.warn('Failed to refresh Agent cache for prepared feedback session', err as Error, {
+          sessionId: routeSessionId
         })
       }
-
-      const session = await createAndActivateEmptySession({
-        agentId: assistant.id,
-        workspaceMode: 'system',
-        forceNewSession: true
-      })
-      if (!session) {
-        showMissingAgentSelection()
-        return
-      }
-
-      setFeedbackComposerLaunch(persistFeedbackComposerLaunch(session.id))
+      setFeedbackComposerLaunch(persistFeedbackComposerLaunch(routeSessionId))
     } catch (err) {
       logger.error('Failed to prepare Cherry Assistant feedback session', err as Error)
       toast.error(t('settings.about.feedback.agent_error'))
       showMissingAgentSelection()
     } finally {
       try {
-        await navigate({ to: '/app/agents', search: {}, replace: true })
+        await navigate({
+          to: '/app/agents',
+          search: routeSessionId ? { sessionId: routeSessionId } : {},
+          replace: true
+        })
       } finally {
         cacheService.deleteCasual(intentGuardCacheKey)
       }
@@ -869,7 +823,7 @@ const AgentPage = () => {
     cacheService.setCasual(intentGuardCacheKey, true, FEEDBACK_INTENT_GUARD_TTL_MS)
     void runFeedbackIntent(intentGuardCacheKey)
     // eslint-disable-next-line react-hooks/exhaustive-deps -- `useEffectEvent` reads the latest feedback orchestration without resubscribing.
-  }, [currentTabId, isFeedbackIntent])
+  }, [currentTabId, isFeedbackIntent, routeSessionId])
 
   useEffect(() => {
     if (initialEmptySessionEvaluatedRef.current) {
@@ -1195,12 +1149,8 @@ const AgentPage = () => {
       <div className="flex min-w-0 flex-1 shrink flex-row overflow-hidden">
         <AgentChat
           centerSurface={centerSurface}
-          activeSession={visibleSession}
-          activeSessionLoading={isActiveSessionLoading}
-          activeSessionSource={activeSessionSource}
+          conversationBootstrap={conversationBootstrap}
           pane={pane}
-          lockedSession={isMessageOnlyView ? (routeSession ?? null) : undefined}
-          lockedSessionLoading={isMessageOnlyView && isRouteSessionLoading}
           paneOpen={shellPaneOpen}
           panePosition="left"
           onPaneCollapse={() => setShellPaneOpenManually(false)}
