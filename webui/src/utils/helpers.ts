@@ -7,6 +7,8 @@ import type {
   WebUiMessagePart,
   WebUiMessageSnapshot,
   WebUiMessageTokenStats,
+  WebUiProcessGroup,
+  WebUiProcessItem,
   WebUiToolCallSnapshot,
   WebUiToolCallState,
   WebUiWorkspaceType
@@ -273,6 +275,88 @@ export const toToolCalls = (parts: readonly WebUiMessagePart[]) => {
   return [...tools.values()]
 }
 
+const HIDDEN_PROCESS_PART_TYPES = new Set([
+  'step-start',
+  'source-url',
+  'source-document',
+  'data-citation',
+  'data-agent-task-event',
+  'data-knowledge-scope',
+  'data-clear'
+])
+
+const isToolMessagePart = (part: WebUiMessagePart) => part.type.startsWith('tool-') || part.type === 'dynamic-tool'
+
+const toToolSnapshot = (part: WebUiMessagePart): WebUiToolCallSnapshot | undefined => {
+  if (!isToolMessagePart(part) || !part.toolCallId) return undefined
+  const input = toDisplayText(part.input)
+  const output = toDisplayText(part.output)
+  const approvalId =
+    typeof part.approval?.id === 'string' && part.approval.id.trim() ? part.approval.id.trim() : undefined
+  return {
+    id: part.toolCallId,
+    name: toToolName(part.type, part.toolName),
+    state: toToolState(part.state),
+    ...(approvalId ? { approvalId } : {}),
+    ...(input ? { input } : {}),
+    ...(output ? { output } : {}),
+    ...(part.errorText ? { errorText: part.errorText } : {})
+  }
+}
+
+export const toProcessGroups = (
+  parts: readonly WebUiMessagePart[],
+  messageId: string
+): readonly WebUiProcessGroup[] => {
+  const groups: WebUiProcessGroup[] = []
+  let items: WebUiProcessItem[] = []
+  let reasoningIndex = -1
+
+  const flush = () => {
+    if (items.length === 0) return
+    groups.push({ id: `${messageId}:process:${groups.length}`, items })
+    items = []
+    reasoningIndex = -1
+  }
+
+  for (const [index, part] of parts.entries()) {
+    if (HIDDEN_PROCESS_PART_TYPES.has(part.type)) continue
+
+    if (part.type === 'reasoning') {
+      const content = part.text ?? ''
+      const previous = items.at(-1)
+      if (previous?.kind === 'reasoning') {
+        items[items.length - 1] = { ...previous, content: `${previous.content}${content}` }
+      } else {
+        reasoningIndex = index
+        items.push({
+          kind: 'reasoning',
+          id: part.id ?? `${messageId}:reasoning:${reasoningIndex}`,
+          content
+        })
+      }
+      continue
+    }
+
+    if (isToolMessagePart(part)) {
+      const tool = toToolSnapshot(part)
+      if (!tool) continue
+      const previous = items.findIndex((item) => item.kind === 'tool' && item.id === tool.id)
+      if (previous >= 0) {
+        items[previous] = { kind: 'tool', id: tool.id, tool }
+      } else {
+        items.push({ kind: 'tool', id: tool.id, tool })
+      }
+      continue
+    }
+
+    flush()
+  }
+
+  flush()
+  return groups
+}
+
 export const toAgentStatusEvents = (parts: readonly WebUiMessagePart[]): readonly WebUiAgentStatusEvent[] => {
   const events: WebUiAgentStatusEvent[] = []
 
@@ -311,6 +395,83 @@ export const upsertAgentStatusEvent = (
   return next
 }
 
+export const appendProcessReasoning = (
+  groups: readonly WebUiProcessGroup[],
+  messageId: string,
+  delta: string
+): readonly WebUiProcessGroup[] => {
+  if (!delta) return groups
+  const next = groups.map((group) => ({ ...group, items: [...group.items] }))
+  const lastGroup = next.at(-1)
+  const lastItem = lastGroup?.items.at(-1)
+  if (lastGroup && lastItem?.kind === 'reasoning') {
+    lastGroup.items[lastGroup.items.length - 1] = {
+      ...lastItem,
+      content: `${lastItem.content}${delta}`,
+      isStreaming: true
+    }
+    return next
+  }
+
+  const group = lastGroup
+  if (group) {
+    group.items.push({
+      kind: 'reasoning',
+      id: `${messageId}:stream-reasoning:${group.items.length}`,
+      content: delta,
+      isStreaming: true
+    })
+    return next
+  }
+
+  next.push({
+    id: `${messageId}:process:${next.length}`,
+    items: [
+      {
+        kind: 'reasoning',
+        id: `${messageId}:stream-reasoning:${next.length}`,
+        content: delta,
+        isStreaming: true
+      }
+    ]
+  })
+  return next
+}
+
+export const upsertProcessTool = (
+  groups: readonly WebUiProcessGroup[],
+  messageId: string,
+  tool: WebUiToolCallSnapshot
+): readonly WebUiProcessGroup[] => {
+  const next = groups.map((group) => ({ ...group, items: [...group.items] }))
+  for (const group of next) {
+    const index = group.items.findIndex((item) => item.kind === 'tool' && item.id === tool.id)
+    if (index >= 0) {
+      group.items[index] = { kind: 'tool', id: tool.id, tool }
+      return next
+    }
+  }
+
+  const lastGroup = next.at(-1)
+  if (lastGroup) {
+    const lastItem = lastGroup.items.at(-1)
+    if (lastItem?.kind === 'reasoning') {
+      lastGroup.items[lastGroup.items.length - 1] = { ...lastItem, isStreaming: false }
+    }
+    lastGroup.items.push({ kind: 'tool', id: tool.id, tool })
+    return next
+  }
+
+  next.push({ id: `${messageId}:process:0`, items: [{ kind: 'tool', id: tool.id, tool }] })
+  return next
+}
+
+export const settleProcessGroups = (groups: readonly WebUiProcessGroup[]): readonly WebUiProcessGroup[] =>
+  groups.map((group) => ({
+    ...group,
+    items: group.items.map((item) => (item.kind === 'reasoning' ? { ...item, isStreaming: false } : item))
+  }))
+
 export const toMessageSnapshot = (message: WebUiAgentSessionMessageEntity): WebUiMessageSnapshot => {
   const parts = message.data.parts ?? []
   const content = parts
@@ -322,6 +483,7 @@ export const toMessageSnapshot = (message: WebUiAgentSessionMessageEntity): WebU
     .map((part) => part.text as string)
     .join('')
   const toolCalls = toToolCalls(parts)
+  const processGroups = toProcessGroups(parts, message.id)
   const agentStatusEvents = toAgentStatusEvents(parts)
   const attachments = parts
     .filter((part) => part.type === 'file')
@@ -347,6 +509,7 @@ export const toMessageSnapshot = (message: WebUiAgentSessionMessageEntity): WebU
     content: content || message.searchableText || '',
     ...(reasoning ? { reasoning } : {}),
     ...(toolCalls.length ? { toolCalls } : {}),
+    ...(processGroups.length ? { processGroups } : {}),
     ...(agentStatusEvents.length ? { agentStatusEvents } : {}),
     ...(attachments.length ? { attachments } : {}),
     ...(modelId ? { modelId } : {}),

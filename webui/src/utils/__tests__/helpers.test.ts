@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import type { WebUiAgentSessionEntity, WebUiConversationSummary, WebUiMessagePart } from '../../types/api'
 import {
+  appendProcessReasoning,
   buildConversationGroups,
   formatDuration,
   getWorkdirPathBasename,
@@ -10,15 +11,18 @@ import {
   normalizeWorkdirPath,
   resolveConversationWorkspaceType,
   resolveWorkspaceSeedFromConversation,
+  settleProcessGroups,
   toAgentStatusEvents,
   toConversationSummary,
   toDisplayText,
   toErrorMessage,
   toMessageSnapshot,
+  toProcessGroups,
   toToolCalls,
   toToolName,
   toToolState,
-  upsertAgentStatusEvent
+  upsertAgentStatusEvent,
+  upsertProcessTool
 } from '../helpers'
 
 describe('toErrorMessage', () => {
@@ -245,6 +249,44 @@ describe('agent status events', () => {
   it('appends new events on upsert', () => {
     const updated = upsertAgentStatusEvent([], { kind: 'tool', id: 't1', name: 'bash', state: 'input-available' })
     expect(updated).toHaveLength(1)
+  })
+})
+
+describe('process groups', () => {
+  it('preserves reasoning and tool order inside one process group', () => {
+    const groups = toProcessGroups(
+      [
+        { type: 'reasoning', text: 'first ' },
+        { type: 'reasoning', text: 'thought' },
+        { type: 'tool-read', toolCallId: 't1', toolName: 'read', state: 'output-available' },
+        { type: 'data-agent-task-event', data: { event: 'progress', taskId: 'task-1' } },
+        { type: 'reasoning', text: 'second thought' },
+        { type: 'tool-search', toolCallId: 't2', toolName: 'search', state: 'output-available' },
+        { type: 'text', text: 'final answer' },
+        { type: 'reasoning', text: 'after text' }
+      ],
+      'm1'
+    )
+
+    expect(groups).toHaveLength(2)
+    expect(groups[0]?.items.map((item) => (item.kind === 'reasoning' ? item.content : item.tool.name))).toEqual([
+      'first thought',
+      'read',
+      'second thought',
+      'search'
+    ])
+    expect(groups[1]?.items[0]).toMatchObject({ kind: 'reasoning', content: 'after text' })
+  })
+
+  it('updates streaming reasoning and tools without moving tool rows', () => {
+    let groups = appendProcessReasoning([], 'm1', 'first')
+    groups = upsertProcessTool(groups, 'm1', { id: 't1', name: 'read', state: 'input-available' })
+    groups = appendProcessReasoning(groups, 'm1', 'second')
+    groups = upsertProcessTool(groups, 'm1', { id: 't1', name: 'read', state: 'output-available', output: 'ok' })
+
+    expect(groups[0]?.items.map((item) => item.kind)).toEqual(['reasoning', 'tool', 'reasoning'])
+    expect(groups[0]?.items[1]).toMatchObject({ kind: 'tool', id: 't1', tool: { state: 'output-available' } })
+    expect(settleProcessGroups(groups)[0]?.items[0]).toMatchObject({ isStreaming: false })
   })
 })
 

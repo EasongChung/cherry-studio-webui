@@ -97,6 +97,24 @@ export type WebUiMessageTokenStats = {
   readonly generationDurationMs?: number
 }
 
+export type WebUiProcessItem =
+  | {
+      readonly kind: 'reasoning'
+      readonly id: string
+      readonly content: string
+      readonly isStreaming?: boolean
+    }
+  | {
+      readonly kind: 'tool'
+      readonly id: string
+      readonly tool: WebUiToolCallSnapshot
+    }
+
+export type WebUiProcessGroup = {
+  readonly id: string
+  readonly items: readonly WebUiProcessItem[]
+}
+
 export type WebUiMessageSnapshot = {
   readonly id: string
   readonly conversationId: string
@@ -104,6 +122,8 @@ export type WebUiMessageSnapshot = {
   readonly content: string
   readonly reasoning?: string
   readonly toolCalls?: readonly WebUiToolCallSnapshot[]
+  /** Reasoning and tool calls grouped in their original message-part order. */
+  readonly processGroups?: readonly WebUiProcessGroup[]
   readonly agentStatusEvents?: readonly WebUiAgentStatusEvent[]
   readonly attachments?: readonly WebUiMessageAttachmentSnapshot[]
   /** Unique model id (`providerId::modelId`) when the assistant turn was created. */

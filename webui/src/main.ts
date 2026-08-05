@@ -48,6 +48,8 @@ import type {
   WebUiPermissionMode,
   WebUiPermissionModeResponse,
   WebUiPreferencesResponse,
+  WebUiProcessGroup,
+  WebUiProcessItem,
   WebUiRole,
   WebUiSendAttachment,
   WebUiSkill,
@@ -87,6 +89,7 @@ import {
   webUiVersion
 } from './utils/constants'
 import {
+  appendProcessReasoning,
   buildConversationGroups,
   conversationGroupKey,
   type ConversationWorkdirGroup,
@@ -96,12 +99,12 @@ import {
   persistCollapsedWorkdirGroups,
   readFileAsDataUrl,
   resolveWorkspaceSeedFromConversation,
-  terminalToolStates,
   toConversationSummary,
   toDisplayText,
   toErrorMessage,
   toMessageSnapshot,
-  upsertAgentStatusEvent
+  upsertAgentStatusEvent,
+  upsertProcessTool
 } from './utils/helpers'
 import {
   type ActionIconName,
@@ -898,7 +901,8 @@ const App = defineComponent({
       message && isAbortError(message) ? text('requestAborted') : message || text('disconnected')
     const isAbortSseMessage = (message?: string) => Boolean(message && isAbortError(message))
 
-    const hasProcessDetails = (message: WebUiMessageSnapshot) => Boolean(message.reasoning || message.toolCalls?.length)
+    const hasProcessDetails = (message: WebUiMessageSnapshot) =>
+      Boolean(message.processGroups?.length || message.reasoning || message.toolCalls?.length)
     const getProcessSummary = (message: WebUiMessageSnapshot) => {
       if (message.status !== 'pending' && message.processingTimeMs) {
         return `${text('processingTime')} ${formatDuration(message.processingTimeMs)}`
@@ -1030,6 +1034,27 @@ const App = defineComponent({
       if (!hasProcessDetails(message)) return undefined
 
       const isThinking = message.status === 'pending'
+      const processGroups: readonly WebUiProcessGroup[] = message.processGroups?.length
+        ? message.processGroups
+        : message.reasoning || message.toolCalls?.length
+          ? [
+              {
+                id: `${message.id}:process:fallback`,
+                items: [
+                  ...(message.reasoning
+                    ? [
+                        {
+                          kind: 'reasoning' as const,
+                          id: `${message.id}:reasoning:fallback`,
+                          content: message.reasoning
+                        }
+                      ]
+                    : []),
+                  ...(message.toolCalls ?? []).map((tool) => ({ kind: 'tool' as const, id: tool.id, tool }))
+                ]
+              }
+            ]
+          : []
       const previewText = isThinking ? (message.reasoning ?? '').replace(/\s+/g, ' ').trim() : ''
       const showRollingPreview = isThinking && previewText.length > 0
       const openOverride = processOpenOverrides.value.get(message.id)
@@ -1070,46 +1095,36 @@ const App = defineComponent({
                 : undefined
             ]
           ),
-          message.reasoning
-            ? h('section', { class: 'process-section' }, [
-                h('details', { class: 'reasoning-block' }, [
-                  h('summary', text('reasoning')),
-                  h('div', {
-                    class: 'markdown-content',
-                    onClick: handleMarkdownContentClick,
-                    innerHTML: renderMarkdown(message.reasoning, {
-                      copyCodeLabel: text('copyCode'),
-                      downloadCodeLabel: text('downloadSource'),
-                      wrapLinesLabel: text('wrapLines')
-                    })
-                  })
-                ])
-              ])
-            : undefined,
-          message.toolCalls?.length
-            ? (() => {
-                const terminal = terminalToolStates
-                const activeTool = [...message.toolCalls]
-                  .reverse()
-                  .find((t: WebUiToolCallSnapshot) => !terminal.has(t.state))
-                const isStreaming = message.status === 'pending'
-                const groupSummary =
-                  isStreaming && activeTool
-                    ? `${text('toolRunning')} ${activeTool.name}`
-                    : `${text('toolCalls')} (${message.toolCalls.length})`
-                return h(
-                  'details',
-                  {
-                    class: ['tool-call-group', { 'tool-call-group-pending': isStreaming }],
-                    ...(isStreaming ? { open: true } : {})
-                  },
-                  [
-                    h('summary', [
-                      h('span', { class: 'tool-call-group-indicator', 'aria-hidden': 'true' }),
-                      h('span', { class: 'tool-call-group-summary' }, groupSummary)
-                    ]),
-                    ...message.toolCalls.map((tool) =>
-                      h(ToolCallBlock, {
+          h(
+            'div',
+            { class: 'process-history' },
+            processGroups.length
+              ? processGroups.map((group) =>
+                  h(
+                    'div',
+                    { class: 'process-history-group', key: group.id },
+                    group.items.map((item: WebUiProcessItem) => {
+                      if (item.kind === 'reasoning') {
+                        return h('details', { class: 'reasoning-block', key: item.id, open: item.isStreaming }, [
+                          h('summary', [
+                            h('span', { class: 'process-item-indicator', 'aria-hidden': 'true' }),
+                            h('span', text('reasoning'))
+                          ]),
+                          h('div', {
+                            class: 'markdown-content process-reasoning-content',
+                            onClick: handleMarkdownContentClick,
+                            innerHTML: renderMarkdown(item.content, {
+                              copyCodeLabel: text('copyCode'),
+                              downloadCodeLabel: text('downloadSource'),
+                              wrapLinesLabel: text('wrapLines')
+                            })
+                          })
+                        ])
+                      }
+
+                      const tool = item.tool
+                      return h(ToolCallBlock, {
+                        key: item.id,
                         tool,
                         message,
                         text,
@@ -1118,11 +1133,26 @@ const App = defineComponent({
                         onApprove: () => void respondToolApproval(tool, message, true),
                         onDeny: () => void respondToolApproval(tool, message, false)
                       })
-                    )
-                  ]
+                    })
+                  )
                 )
-              })()
-            : undefined
+              : message.reasoning
+                ? [
+                    h('details', { class: 'reasoning-block', open: isThinking }, [
+                      h('summary', text('reasoning')),
+                      h('div', {
+                        class: 'markdown-content process-reasoning-content',
+                        onClick: handleMarkdownContentClick,
+                        innerHTML: renderMarkdown(message.reasoning, {
+                          copyCodeLabel: text('copyCode'),
+                          downloadCodeLabel: text('downloadSource'),
+                          wrapLinesLabel: text('wrapLines')
+                        })
+                      })
+                    ])
+                  ]
+                : []
+          )
         ]
       )
     }
@@ -2954,7 +2984,11 @@ const App = defineComponent({
         if (streamSealed) return true
         const previousReasoning = message.reasoning ?? ''
         if (previousReasoning.endsWith(chunk.delta)) return true
-        nextMessages[messageIndex] = { ...message, reasoning: `${previousReasoning}${chunk.delta}` }
+        nextMessages[messageIndex] = {
+          ...message,
+          reasoning: `${previousReasoning}${chunk.delta}`,
+          processGroups: appendProcessReasoning(message.processGroups ?? [], message.id, chunk.delta)
+        }
         scrollThinkingPreview()
       } else if (chunk.type === 'data-agent-task-event' && isWebUiAgentTaskEventData(chunk.data)) {
         const statusEvent: WebUiAgentStatusEvent = {
@@ -3029,6 +3063,7 @@ const App = defineComponent({
         nextMessages[messageIndex] = {
           ...message,
           toolCalls: [...previousTools.filter((tool) => tool.id !== chunk.toolCallId), nextTool],
+          processGroups: upsertProcessTool(message.processGroups ?? [], message.id, nextTool),
           agentStatusEvents: upsertAgentStatusEvent(previousStatusEvents, {
             kind: 'tool',
             id: chunk.toolCallId,
