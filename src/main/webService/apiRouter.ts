@@ -804,11 +804,11 @@ export const createWebUiApiRouter = ({
           body: {
             showEstimatedTokens: Boolean(prefService.get('chat.input.show_estimated_tokens')),
             thoughtAutoCollapse: Boolean(prefService.get('chat.message.thought.auto_collapse')),
-            chatInputPinnedTools: prefService.get<string[]>('chat.input.toolbar.pinned_tools') ?? [
+            chatInputPinnedTools: (prefService.get('chat.input.toolbar.pinned_tools') as string[] | undefined) ?? [
               'composer:new-conversation',
               'web-search'
             ],
-            agentInputPinnedTools: prefService.get<string[]>('agent.input.toolbar.pinned_tools') ?? [
+            agentInputPinnedTools: (prefService.get('agent.input.toolbar.pinned_tools') as string[] | undefined) ?? [
               'composer:new-session',
               'skills'
             ]
