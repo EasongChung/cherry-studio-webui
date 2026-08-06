@@ -845,11 +845,11 @@
     align-items: center;
     min-width: 0;
     max-width: 160px;
-    padding: 1px 8px;
+    padding: 2px 8px;
     overflow: hidden;
     color: #475569;
-    font-size: 11px;
-    line-height: 20px;
+    font-size: 13px;
+    line-height: 18px;
     text-align: left;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -3900,15 +3900,16 @@
 
   .quick-panel {
     position: absolute;
-    bottom: calc(100% + 4px);
+    bottom: calc(100% + 8px);
     left: 0;
     z-index: 50;
     min-width: 200px;
-    padding: 8px;
+    width: min(320px, calc(100% - 16px));
+    padding: 6px;
     background: #ffffff;
-    border: 1px solid #e5e7eb;
-    border-radius: 8px;
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.12);
+    border: 1px solid #dbe1ea;
+    border-radius: 12px;
+    box-shadow: 0 12px 32px rgb(15 23 42 / 14%);
   }
 
   /* Right-edge trigger: open leftwards so the panel stays inside the composer. */
@@ -3933,33 +3934,34 @@
 
   .quick-panel-item {
     display: flex;
-    gap: 8px;
+    gap: 10px;
     align-items: center;
     width: 100%;
-    padding: 6px 8px;
+    padding: 9px 10px;
     font-size: 13px;
-    color: #374151;
+    font-weight: 600;
+    color: #1f2937;
     text-align: left;
-    background: none;
-    border: none;
-    border-radius: 4px;
+    background: transparent;
+    border: 0;
+    border-radius: 8px;
     cursor: pointer;
   }
 
   .quick-panel-item:hover,
   .quick-panel-item:focus-visible {
-    background: #f1f5f9;
+    background: #eef2ff;
   }
 
   .quick-panel-item-pinned {
-    font-weight: 600;
     color: #2563eb;
   }
 
   .quick-panel-item-icon {
     display: grid;
     place-items: center;
-    width: 16px;
+    width: 18px;
+    font-size: 14px;
     height: 16px;
     font-size: 12px;
     font-weight: 700;
@@ -5223,8 +5225,9 @@
   }
 
   :root[data-webui-theme='dark'] .quick-panel {
-    background: #273449;
-    border-color: #475569;
+    background: #1e293b;
+    border-color: #334155;
+    box-shadow: 0 12px 32px rgb(0 0 0 / 40%);
   }
 
   :root[data-webui-theme='dark'] .quick-panel-title {
@@ -5237,7 +5240,7 @@
 
   :root[data-webui-theme='dark'] .quick-panel-item:hover,
   :root[data-webui-theme='dark'] .quick-panel-item:focus-visible {
-    background: #334155;
+    background: #1e3a5f;
   }
 
   :root[data-webui-theme='dark'] .quick-panel-item-pinned {
@@ -5960,6 +5963,8 @@
     .mobile-header-picker-menu {
       right: 0;
       left: auto;
+      top: auto;
+      bottom: calc(100% + 6px);
       width: min(280px, calc(100vw - 24px));
       max-height: min(320px, 44dvh);
     }

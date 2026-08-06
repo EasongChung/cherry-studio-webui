@@ -289,7 +289,22 @@ const App = defineComponent({
     const kbSearching = ref(false)
     const workspaces = ref<readonly WebUiAgentWorkspace[]>([])
     const workspacesLoading = ref(false)
-    const reasoningEffort = ref('default')
+    const reasoningEffort = ref(
+      (() => {
+        try {
+          return window.localStorage.getItem('cherry-webui.reasoningEffort') || 'default'
+        } catch {
+          return 'default'
+        }
+      })()
+    )
+    watch(reasoningEffort, (val) => {
+      try {
+        window.localStorage.setItem('cherry-webui.reasoningEffort', val)
+      } catch {
+        /* ignore — ephemeral setting */
+      }
+    })
     /** Fast-mode toggle (openai-priority service tier). Restored from localStorage — an
      *  authoring preference, not session data, so it survives reloads without persistence. */
     const fastModeEnabled = ref(false)
@@ -438,9 +453,20 @@ const App = defineComponent({
     })
     const models = computed(() => modelGroups.value.flatMap((group) => group.models))
     const selectedModel = computed(() => models.value.find((model) => model.id === selectedAgent.value?.model))
-    const modelPickerLabel = computed(
-      () => selectedModel.value?.name ?? selectedAgent.value?.modelName ?? selectedAgent.value?.model ?? text('agent')
-    )
+    /** Strip UUID or provider-id prefix from model names — e.g. "1258a958-...:deepseek v4 flash" → "deepseek v4 flash". */
+    const stripModelNamePrefix = (raw: string): string => {
+      const uuidMatch = raw.match(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}:(.+)$/i)
+      if (uuidMatch) return uuidMatch[1] ?? raw
+      // Also strip providerId:: prefix (e.g. "providerId::modelName")
+      const providerPrefixMatch = raw.match(/^[^:]+::(.+)$/)
+      if (providerPrefixMatch) return providerPrefixMatch[1] ?? raw
+      return raw
+    }
+    const modelPickerLabel = computed(() => {
+      const raw =
+        selectedModel.value?.name ?? selectedAgent.value?.modelName ?? selectedAgent.value?.model ?? text('agent')
+      return stripModelNamePrefix(raw)
+    })
     /**
      * Whether the currently selected conversation already has any message(s).
      * Mirrors the desktop UX: once a session has messages, its agent and workspace
@@ -3717,20 +3743,6 @@ const App = defineComponent({
               {
                 class: 'message-action-button',
                 type: 'button',
-                title: text('quote'),
-                'aria-label': text('quote'),
-                disabled: !selectedConversation.value,
-                onClick: () => insertQuotedMessage(message)
-              },
-              renderActionIcon('quote')
-            )
-          : undefined,
-        message.content
-          ? h(
-              'button',
-              {
-                class: 'message-action-button',
-                type: 'button',
                 title: text('copy'),
                 'aria-label': text('copy'),
                 onClick: () => {
@@ -3825,6 +3837,21 @@ const App = defineComponent({
                       [h('span', { class: 'message-more-menu-item-label' }, text('multiSelectMode'))]
                     ),
                     h('div', { class: 'message-more-menu-separator', role: 'separator' }),
+                    message.content
+                      ? h(
+                          'button',
+                          {
+                            class: 'message-more-menu-item',
+                            type: 'button',
+                            role: 'menuitem',
+                            onClick: () => {
+                              moreMenuMessageId.value = null
+                              insertQuotedMessage(message)
+                            }
+                          },
+                          [h('span', { class: 'message-more-menu-item-label' }, text('quote'))]
+                        )
+                      : undefined,
                     h(
                       'button',
                       {
@@ -5350,91 +5377,109 @@ const App = defineComponent({
                             },
                             renderComposerToolIcon('permission')
                           ),
-                          h(
-                            'button',
-                            {
-                              class: ['composer-tool-button', { 'composer-tool-button-active': skillPickerOpen.value }],
-                              type: 'button',
-                              disabled: !selectedConversation.value,
-                              title: text('skillLauncher'),
-                              'aria-label': text('skillLauncher'),
-                              'aria-expanded': skillPickerOpen.value,
-                              onClick: () => {
-                                skillPickerOpen.value = !skillPickerOpen.value
-                                modelPickerOpen.value = false
-                                reasoningPickerOpen.value = false
-                                permissionModePickerOpen.value = false
-                                agentPickerOpen.value = false
-                                workspacePickerOpen.value = false
-                                kbPickerOpen.value = false
-                              }
-                            },
-                            renderComposerToolIcon('skill')
-                          ),
-                          h(
-                            'button',
-                            {
-                              class: ['composer-tool-button', { 'composer-tool-button-active': kbPickerOpen.value }],
-                              type: 'button',
-                              disabled: !selectedConversation.value,
-                              title: text('knowledgeSearch'),
-                              'aria-label': text('knowledgeSearch'),
-                              'aria-expanded': kbPickerOpen.value,
-                              onClick: () => {
-                                kbPickerOpen.value = !kbPickerOpen.value
-                                modelPickerOpen.value = false
-                                reasoningPickerOpen.value = false
-                                permissionModePickerOpen.value = false
-                                agentPickerOpen.value = false
-                                workspacePickerOpen.value = false
-                                skillPickerOpen.value = false
-                              }
-                            },
-                            renderComposerToolIcon('knowledge')
-                          ),
-                          h(
-                            'button',
-                            {
-                              class: 'composer-tool-button',
-                              type: 'button',
-                              disabled: !selectedConversation.value,
-                              title: text('compact'),
-                              'aria-label': text('compact'),
-                              onClick: () => {
-                                modelPickerOpen.value = false
-                                reasoningPickerOpen.value = false
-                                permissionModePickerOpen.value = false
-                                agentPickerOpen.value = false
-                                workspacePickerOpen.value = false
-                                skillPickerOpen.value = false
-                                kbPickerOpen.value = false
-                                insertCompact()
-                              }
-                            },
-                            renderComposerToolIcon('compact')
-                          ),
-                          h(
-                            'button',
-                            {
-                              class: ['composer-tool-button', { 'composer-tool-button-active': fastModeEnabled.value }],
-                              type: 'button',
-                              disabled: !selectedConversation.value || !fastModeSupported.value,
-                              title: text('fastModeDescription'),
-                              'aria-label': text('fastMode'),
-                              'aria-pressed': fastModeEnabled.value,
-                              onClick: () => {
-                                modelPickerOpen.value = false
-                                reasoningPickerOpen.value = false
-                                permissionModePickerOpen.value = false
-                                agentPickerOpen.value = false
-                                workspacePickerOpen.value = false
-                                skillPickerOpen.value = false
-                                kbPickerOpen.value = false
-                                toggleFastMode()
-                              }
-                            },
-                            renderComposerToolIcon('fastMode')
-                          ),
+                          // Conditionally rendered tools: only show when pinned in the quick panel.
+                          chatInputPinnedTools.value.includes('skill')
+                            ? h(
+                                'button',
+                                {
+                                  class: [
+                                    'composer-tool-button',
+                                    { 'composer-tool-button-active': skillPickerOpen.value }
+                                  ],
+                                  type: 'button',
+                                  disabled: !selectedConversation.value,
+                                  title: text('skillLauncher'),
+                                  'aria-label': text('skillLauncher'),
+                                  'aria-expanded': skillPickerOpen.value,
+                                  onClick: () => {
+                                    skillPickerOpen.value = !skillPickerOpen.value
+                                    modelPickerOpen.value = false
+                                    reasoningPickerOpen.value = false
+                                    permissionModePickerOpen.value = false
+                                    agentPickerOpen.value = false
+                                    workspacePickerOpen.value = false
+                                    kbPickerOpen.value = false
+                                  }
+                                },
+                                renderComposerToolIcon('skill')
+                              )
+                            : undefined,
+                          chatInputPinnedTools.value.includes('knowledge')
+                            ? h(
+                                'button',
+                                {
+                                  class: [
+                                    'composer-tool-button',
+                                    { 'composer-tool-button-active': kbPickerOpen.value }
+                                  ],
+                                  type: 'button',
+                                  disabled: !selectedConversation.value,
+                                  title: text('knowledgeSearch'),
+                                  'aria-label': text('knowledgeSearch'),
+                                  'aria-expanded': kbPickerOpen.value,
+                                  onClick: () => {
+                                    kbPickerOpen.value = !kbPickerOpen.value
+                                    modelPickerOpen.value = false
+                                    reasoningPickerOpen.value = false
+                                    permissionModePickerOpen.value = false
+                                    agentPickerOpen.value = false
+                                    workspacePickerOpen.value = false
+                                    skillPickerOpen.value = false
+                                  }
+                                },
+                                renderComposerToolIcon('knowledge')
+                              )
+                            : undefined,
+                          chatInputPinnedTools.value.includes('compact')
+                            ? h(
+                                'button',
+                                {
+                                  class: 'composer-tool-button',
+                                  type: 'button',
+                                  disabled: !selectedConversation.value,
+                                  title: text('compact'),
+                                  'aria-label': text('compact'),
+                                  onClick: () => {
+                                    modelPickerOpen.value = false
+                                    reasoningPickerOpen.value = false
+                                    permissionModePickerOpen.value = false
+                                    agentPickerOpen.value = false
+                                    workspacePickerOpen.value = false
+                                    skillPickerOpen.value = false
+                                    kbPickerOpen.value = false
+                                    insertCompact()
+                                  }
+                                },
+                                renderComposerToolIcon('compact')
+                              )
+                            : undefined,
+                          chatInputPinnedTools.value.includes('fastMode')
+                            ? h(
+                                'button',
+                                {
+                                  class: [
+                                    'composer-tool-button',
+                                    { 'composer-tool-button-active': fastModeEnabled.value }
+                                  ],
+                                  type: 'button',
+                                  disabled: !selectedConversation.value || !fastModeSupported.value,
+                                  title: text('fastModeDescription'),
+                                  'aria-label': text('fastMode'),
+                                  'aria-pressed': fastModeEnabled.value,
+                                  onClick: () => {
+                                    modelPickerOpen.value = false
+                                    reasoningPickerOpen.value = false
+                                    permissionModePickerOpen.value = false
+                                    agentPickerOpen.value = false
+                                    workspacePickerOpen.value = false
+                                    skillPickerOpen.value = false
+                                    kbPickerOpen.value = false
+                                    toggleFastMode()
+                                  }
+                                },
+                                renderComposerToolIcon('fastMode')
+                              )
+                            : undefined,
                           // Quick-panel trigger button (stays inside the toolbar).
                           h('div', { class: 'composer-tools-quick-panel-slot' }, [
                             h(
@@ -5778,7 +5823,10 @@ const App = defineComponent({
                           { class: 'quick-panel-items' },
                           (
                             [
-                              { id: 'composer:new-conversation', labelKey: 'newConversationTool' as const },
+                              { id: 'skill', labelKey: 'skillLauncher' as const },
+                              { id: 'knowledge', labelKey: 'knowledgeSearch' as const },
+                              { id: 'compact', labelKey: 'compact' as const },
+                              { id: 'fastMode', labelKey: 'fastMode' as const },
                               { id: 'web-search', labelKey: 'knowledgeSearch' as const }
                             ] as const
                           ).map((item) => {
