@@ -108,6 +108,7 @@ import {
 } from './utils/helpers'
 import {
   type ActionIconName,
+  type ComposerToolIconName,
   renderActionIcon,
   renderAgentStatusIcon,
   renderComposerToolIcon,
@@ -200,6 +201,12 @@ const App = defineComponent({
     const agentInputPinnedTools = ref<readonly string[]>([])
     /** Whether the "➕" quick-panel tool picker is open. */
     const quickPanelOpen = ref(false)
+    /** Live search text typed inside the quick panel (the desktop panel filters as you type). */
+    const quickPanelQuery = ref('')
+    /** Keyboard cursor into the filtered launcher list. */
+    const quickPanelActiveIndex = ref(0)
+    /** Open submenu id, e.g. 'prompts' — mirrors the desktop `isMenu` drill-down. */
+    const quickPanelSubmenu = ref<string | null>(null)
     /** Points at the rolling reasoning sliver of the currently-streaming message, for `scrollLeft` updates. */
     const activeThinkingPreview = ref<HTMLElement | null>(null)
     /** Re-renders active process elapsed time once per second, matching desktop live progress. */
@@ -453,13 +460,25 @@ const App = defineComponent({
     })
     const models = computed(() => modelGroups.value.flatMap((group) => group.models))
     const selectedModel = computed(() => models.value.find((model) => model.id === selectedAgent.value?.model))
-    /** Strip UUID or provider-id prefix from model names — e.g. "1258a958-...:deepseek v4 flash" → "deepseek v4 flash". */
+    /**
+     * Strip an id prefix from a model display name.
+     *
+     * Agent-backed models arrive as `<agentId>:<modelName>` (the agent id is a
+     * UUID) and catalog ids as `<providerId>::<modelId>`. Both prefixes are
+     * plumbing, not something the user should read in the picker or the message
+     * header. Applied at every render site — computing it in one place only
+     * (the header trigger) left the dropdown and the message byline unstripped.
+     */
     const stripModelNamePrefix = (raw: string): string => {
-      const uuidMatch = raw.match(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}:(.+)$/i)
-      if (uuidMatch) return uuidMatch[1] ?? raw
-      // Also strip providerId:: prefix (e.g. "providerId::modelName")
+      // `providerId::modelId` — the double colon is unambiguous, so take the tail.
       const providerPrefixMatch = raw.match(/^[^:]+::(.+)$/)
       if (providerPrefixMatch) return providerPrefixMatch[1] ?? raw
+      // `<uuid>:<name>` — match the UUID with and without dashes; only a UUID
+      // prefix is stripped so legitimate names containing ':' survive intact.
+      const uuidMatch = raw.match(
+        /^(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[0-9a-f]{32}):(.+)$/i
+      )
+      if (uuidMatch) return uuidMatch[1] ?? raw
       return raw
     }
     const modelPickerLabel = computed(() => {
@@ -589,11 +608,11 @@ const App = defineComponent({
       if (message.role !== 'assistant') return ''
       if (!message.modelId) return ''
       const fromCatalog = models.value.find((model) => model.id === message.modelId)
-      if (fromCatalog?.name) return fromCatalog.name
+      if (fromCatalog?.name) return stripModelNamePrefix(fromCatalog.name)
       const bareId = message.modelId.includes('::')
         ? (message.modelId.split('::').pop() ?? message.modelId)
         : message.modelId
-      return bareId
+      return stripModelNamePrefix(bareId)
     }
     const messageHeaderLabel = (message: WebUiMessageSnapshot) => {
       const author = messageAuthorName(message.role)
@@ -1056,6 +1075,58 @@ const App = defineComponent({
         approvalError: approvalErrorByKey.value[approvalKey(pending.message.id, pending.tool.id)],
         onApprove: () => void respondToolApproval(pending.tool, pending.message, true),
         onDeny: () => void respondToolApproval(pending.tool, pending.message, false)
+      })
+    }
+
+    /**
+     * Timeline marker for a compacted stretch of conversation — mirrors the
+     * desktop CompactionAnchorBlock. `compacting` shows a live status row;
+     * `done` settles into a dashed rule annotated with the tokens reclaimed
+     * (or a plain dot when the path could not measure both ends).
+     */
+    const renderCompactionAnchors = (message: WebUiMessageSnapshot) => {
+      const anchors = message.compactionAnchors ?? []
+      if (!anchors.length) return undefined
+      return anchors.map((anchor) => {
+        const saved =
+          anchor.preTokens !== undefined && anchor.postTokens !== undefined && anchor.preTokens > anchor.postTokens
+            ? anchor.preTokens - anchor.postTokens
+            : undefined
+        const compacting = anchor.status === 'compacting'
+        const label = compacting
+          ? text('compactionCompacting')
+          : saved === undefined
+            ? text('compactionCompacted')
+            : text('compactionCompactedSaved').replace('{count}', formatCompactNumber(saved))
+        // In-loop folds happen between tool calls of one continuous loop, so they
+        // render as a compact inline row instead of a full-width rule.
+        if (anchor.phase === 'in-loop') {
+          return h(
+            'div',
+            {
+              class: 'compaction-anchor compaction-anchor-inline',
+              key: anchor.id,
+              ...(compacting ? { role: 'status', 'aria-live': 'polite' } : {})
+            },
+            [
+              h('span', { class: 'compaction-anchor-dot', 'aria-hidden': 'true' }),
+              h('span', { class: 'compaction-anchor-label' }, label)
+            ]
+          )
+        }
+        return h(
+          'div',
+          {
+            class: ['compaction-anchor', { 'compaction-anchor-pending': compacting }],
+            key: anchor.id,
+            ...(compacting ? { role: 'status', 'aria-live': 'polite' } : { role: 'separator' })
+          },
+          [
+            h('span', { class: 'compaction-anchor-rule', 'aria-hidden': 'true' }),
+            h('span', { class: 'compaction-anchor-label' }, label),
+            h('span', { class: 'compaction-anchor-rule', 'aria-hidden': 'true' })
+          ]
+        )
       })
     }
 
@@ -4025,6 +4096,233 @@ const App = defineComponent({
       }
     }
 
+    /**
+     * One row of the composer tool launcher, mirroring the desktop
+     * `QuickPanelListItem` shape used by `composer/quickPanel/unifiedPanel.ts`.
+     */
+    type QuickPanelEntry = {
+      readonly id: string
+      readonly label: string
+      readonly description?: string
+      readonly icon?: ComposerToolIconName
+      readonly suffix?: string
+      /** Drills into a submenu instead of firing an action. */
+      readonly isMenu?: boolean
+      readonly disabled?: boolean
+      readonly section: 'primary-tools' | 'commands' | 'resources'
+      readonly action?: () => void
+    }
+
+    /** Close the panel and reset its transient search / cursor / submenu state. */
+    const closeQuickPanel = () => {
+      quickPanelOpen.value = false
+      quickPanelQuery.value = ''
+      quickPanelActiveIndex.value = 0
+      quickPanelSubmenu.value = null
+    }
+
+    /** Clear every other composer popover so only one surface is open at a time. */
+    const closeOtherComposerPopovers = () => {
+      modelPickerOpen.value = false
+      reasoningPickerOpen.value = false
+      permissionModePickerOpen.value = false
+      agentPickerOpen.value = false
+      workspacePickerOpen.value = false
+      skillPickerOpen.value = false
+      kbPickerOpen.value = false
+    }
+
+    /**
+     * Full launcher catalog, in desktop section order:
+     * primary tools → slash commands → resources (skills / knowledge bases).
+     *
+     * Pinned tools are NOT removed from the list (the desktop keeps them
+     * reachable); they render with a "pinned" badge instead so the panel stays
+     * a launcher rather than a pin/unpin toggle board.
+     */
+    const quickPanelEntries = computed<readonly QuickPanelEntry[]>(() => {
+      const entries: QuickPanelEntry[] = [
+        {
+          id: 'attachment',
+          label: text('attachmentPending'),
+          description: text('quickPanelAttachmentDescription'),
+          icon: 'attachment',
+          section: 'primary-tools',
+          disabled: attachments.value.length >= maxAttachmentCount,
+          action: () => attachmentInput.value?.click()
+        },
+        {
+          id: 'knowledge',
+          label: text('knowledgeSearch'),
+          description: knowledgeBases.value.length
+            ? text('quickPanelKnowledgeDescription')
+            : text('quickPanelKnowledgeEmpty'),
+          icon: 'knowledge',
+          section: 'primary-tools',
+          disabled: !selectedConversation.value || !knowledgeBases.value.length,
+          action: () => {
+            closeOtherComposerPopovers()
+            kbPickerOpen.value = true
+          }
+        },
+        {
+          id: 'skill',
+          label: text('skillLauncher'),
+          description: skills.value.length ? text('quickPanelSkillDescription') : text('skillLauncherEmpty'),
+          icon: 'skill',
+          section: 'primary-tools',
+          isMenu: true,
+          disabled: !selectedConversation.value || !skills.value.length,
+          action: () => {
+            quickPanelSubmenu.value = 'skill'
+            quickPanelQuery.value = ''
+            quickPanelActiveIndex.value = 0
+          }
+        },
+        {
+          id: 'compact',
+          label: text('compact'),
+          description: text('compactDescription'),
+          icon: 'compact',
+          section: 'primary-tools',
+          disabled: !selectedConversation.value,
+          action: () => {
+            closeOtherComposerPopovers()
+            insertCompact()
+          }
+        },
+        {
+          id: 'fastMode',
+          label: text('fastMode'),
+          description: text('fastModeDescription'),
+          icon: 'fastMode',
+          section: 'primary-tools',
+          suffix: fastModeEnabled.value ? text('on') : undefined,
+          disabled: !selectedConversation.value || !fastModeSupported.value,
+          action: () => {
+            closeOtherComposerPopovers()
+            toggleFastMode()
+          }
+        },
+        {
+          id: 'newConversation',
+          label: text('newConversationTool'),
+          description: text('quickPanelNewConversationDescription'),
+          icon: 'newConversation',
+          section: 'primary-tools',
+          action: () => void openNewConversation()
+        },
+        {
+          id: 'thinking',
+          label: text('thinkingPending'),
+          description: reasoningConfigurable.value ? reasoningLabel.value : text('thinkingUnavailable'),
+          icon: 'thinking',
+          section: 'primary-tools',
+          disabled: !reasoningConfigurable.value,
+          action: () => {
+            closeOtherComposerPopovers()
+            reasoningPickerOpen.value = true
+          }
+        },
+        {
+          id: 'permission',
+          label: text('permissionMode'),
+          description: permissionModeLabel.value,
+          icon: 'permission',
+          section: 'primary-tools',
+          disabled: !selectedConversation.value,
+          action: () => {
+            closeOtherComposerPopovers()
+            permissionModePickerOpen.value = true
+          }
+        }
+      ]
+
+      // Slash commands become launcher rows too — selecting one prefills the composer.
+      for (const command of slashCommands.value) {
+        entries.push({
+          id: `command:${command.name}`,
+          label: `/${command.name}`,
+          ...(command.description ? { description: command.description } : {}),
+          section: 'commands',
+          action: () => {
+            composerText.value = `/${command.name} `
+            composerTextarea.value?.focus()
+          }
+        })
+      }
+
+      return entries
+    })
+
+    /** Rows of the open submenu (currently only the skill drill-down). */
+    const quickPanelSubmenuEntries = computed<readonly QuickPanelEntry[]>(() => {
+      if (quickPanelSubmenu.value !== 'skill') return []
+      return skills.value.map((skill) => ({
+        id: `skill:${skill.name}`,
+        label: skill.name,
+        ...(skill.description ? { description: skill.description } : {}),
+        section: 'resources' as const,
+        action: () => {
+          composerText.value = `${composerText.value}${composerText.value && !composerText.value.endsWith(' ') ? ' ' : ''}/${skill.name} `
+          composerTextarea.value?.focus()
+        }
+      }))
+    })
+
+    /**
+     * Case-insensitive substring match over label + description, matching the
+     * desktop `filterUnifiedQuickPanelItems` behaviour minus its pinyin passes
+     * (the web build has no tiny-pinyin dependency).
+     */
+    const quickPanelVisibleEntries = computed<readonly QuickPanelEntry[]>(() => {
+      const source = quickPanelSubmenu.value ? quickPanelSubmenuEntries.value : quickPanelEntries.value
+      const query = quickPanelQuery.value.trim().toLowerCase()
+      if (!query) return source
+      return source.filter((entry) => `${entry.label} ${entry.description ?? ''}`.toLowerCase().includes(query))
+    })
+
+    /** Run a launcher row, honouring `disabled` and submenu drill-down. */
+    const activateQuickPanelEntry = (entry: QuickPanelEntry) => {
+      if (entry.disabled) return
+      entry.action?.()
+      // Submenu rows keep the panel open so the user can pick from the drill-down.
+      if (!entry.isMenu) closeQuickPanel()
+    }
+
+    /**
+     * Keyboard model copied from the desktop panel footer hint:
+     * ▲▼ move, Ctrl+▲▼ page, Tab/Enter confirm, Esc closes (or exits a submenu).
+     */
+    const handleQuickPanelKeydown = (event: KeyboardEvent) => {
+      const entries = quickPanelVisibleEntries.value
+      const pageSize = 5
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        if (quickPanelSubmenu.value) {
+          quickPanelSubmenu.value = null
+          quickPanelQuery.value = ''
+          quickPanelActiveIndex.value = 0
+          return
+        }
+        closeQuickPanel()
+        return
+      }
+      if (!entries.length) return
+      const move = (delta: number) => {
+        event.preventDefault()
+        const next = quickPanelActiveIndex.value + delta
+        quickPanelActiveIndex.value = Math.max(0, Math.min(entries.length - 1, next))
+      }
+      if (event.key === 'ArrowDown') return move(event.ctrlKey ? pageSize : 1)
+      if (event.key === 'ArrowUp') return move(event.ctrlKey ? -pageSize : -1)
+      if (event.key === 'Enter' || event.key === 'Tab') {
+        event.preventDefault()
+        const entry = entries[Math.min(quickPanelActiveIndex.value, entries.length - 1)]
+        if (entry) activateQuickPanelEntry(entry)
+      }
+    }
+
     const startAuthenticatedSession = () => {
       void loadWebUiPreferences()
       void refreshHealth()
@@ -4244,7 +4542,9 @@ const App = defineComponent({
           },
           [
             h('span', { class: 'chat-header-picker-option-name' }, agent.name),
-            agent.model ? h('span', { class: 'chat-header-picker-option-detail' }, agent.model) : undefined
+            agent.model
+              ? h('span', { class: 'chat-header-picker-option-detail' }, stripModelNamePrefix(agent.model))
+              : undefined
           ]
         )
       )
@@ -4274,7 +4574,7 @@ const App = defineComponent({
               }
             },
             [
-              h('span', { class: 'model-picker-name' }, model.name),
+              h('span', { class: 'model-picker-name' }, stripModelNamePrefix(model.name)),
               h('span', { class: 'model-picker-provider' }, model.group ?? model.providerId)
             ]
           )
@@ -5059,6 +5359,7 @@ const App = defineComponent({
                             h('p', { class: 'message-role' }, messageHeaderLabel(message))
                           ]),
                           renderProcessDetails(message),
+                          renderCompactionAnchors(message),
                           message.attachments?.length
                             ? h(
                                 'div',
@@ -5495,11 +5796,13 @@ const App = defineComponent({
                                 'aria-expanded': quickPanelOpen.value,
                                 onClick: () => {
                                   quickPanelOpen.value = !quickPanelOpen.value
-                                  modelPickerOpen.value = false
-                                  reasoningPickerOpen.value = false
-                                  permissionModePickerOpen.value = false
-                                  skillPickerOpen.value = false
-                                  kbPickerOpen.value = false
+                                  if (quickPanelOpen.value) {
+                                    closeOtherComposerPopovers()
+                                  } else {
+                                    quickPanelQuery.value = ''
+                                    quickPanelActiveIndex.value = 0
+                                    quickPanelSubmenu.value = null
+                                  }
                                 }
                               },
                               h('span', { class: 'quick-panel-trigger-icon' }, '+')
@@ -5624,7 +5927,17 @@ const App = defineComponent({
                           )
                         : undefined,
                       pendingModelSwitchTarget.value
-                        ? h('div', { class: 'model-switch-confirm-dialog' }, [
+                        ? h('button', {
+                            class: 'model-switch-confirm-backdrop',
+                            type: 'button',
+                            'aria-label': text('cancel'),
+                            onClick: () => {
+                              cancelSwitchModel()
+                            }
+                          })
+                        : undefined,
+                      pendingModelSwitchTarget.value
+                        ? h('div', { class: 'model-switch-confirm-dialog', role: 'dialog', 'aria-modal': 'true' }, [
                             h('p', { class: 'model-switch-confirm-title' }, text('modelSwitchConfirmTitle')),
                             h(
                               'p',
@@ -5810,47 +6123,97 @@ const App = defineComponent({
                   quickPanelOpen.value
                     ? h('div', {
                         class: 'quick-panel-overlay',
-                        onClick: () => {
-                          quickPanelOpen.value = false
-                        }
+                        onClick: closeQuickPanel
                       })
                     : undefined,
                   quickPanelOpen.value
-                    ? h('div', { class: 'quick-panel quick-panel-end' }, [
-                        h('p', { class: 'quick-panel-title' }, text('quickPanel')),
+                    ? h('div', { class: 'quick-panel', role: 'dialog', 'aria-label': text('quickPanel') }, [
+                        h('div', { class: 'quick-panel-search-row' }, [
+                          quickPanelSubmenu.value
+                            ? h(
+                                'button',
+                                {
+                                  class: 'quick-panel-back',
+                                  type: 'button',
+                                  'aria-label': text('back'),
+                                  onClick: () => {
+                                    quickPanelSubmenu.value = null
+                                    quickPanelQuery.value = ''
+                                    quickPanelActiveIndex.value = 0
+                                  }
+                                },
+                                '‹'
+                              )
+                            : undefined,
+                          h('input', {
+                            class: 'quick-panel-search',
+                            type: 'text',
+                            // Autofocus so the panel is keyboard-driven the moment it opens,
+                            // matching the desktop panel's type-to-filter behaviour.
+                            autofocus: true,
+                            placeholder: text('quickPanel'),
+                            value: quickPanelQuery.value,
+                            onInput: (event: Event) => {
+                              quickPanelQuery.value = (event.target as HTMLInputElement).value
+                              quickPanelActiveIndex.value = 0
+                            },
+                            onKeydown: handleQuickPanelKeydown
+                          })
+                        ]),
                         h(
                           'div',
-                          { class: 'quick-panel-items' },
-                          (
-                            [
-                              { id: 'skill', labelKey: 'skillLauncher' as const },
-                              { id: 'knowledge', labelKey: 'knowledgeSearch' as const },
-                              { id: 'compact', labelKey: 'compact' as const },
-                              { id: 'fastMode', labelKey: 'fastMode' as const },
-                              { id: 'web-search', labelKey: 'knowledgeSearch' as const }
-                            ] as const
-                          ).map((item) => {
-                            const isPinned = chatInputPinnedTools.value.includes(item.id)
-                            return h(
-                              'button',
-                              {
-                                class: ['quick-panel-item', { 'quick-panel-item-pinned': isPinned }],
-                                type: 'button',
-                                key: item.id,
-                                onClick: () => {
-                                  const next = isPinned
-                                    ? chatInputPinnedTools.value.filter((id) => id !== item.id)
-                                    : [...chatInputPinnedTools.value, item.id]
-                                  void savePinnedTools(next)
-                                }
-                              },
-                              [
-                                h('span', { class: 'quick-panel-item-icon' }, isPinned ? '✓' : ''),
-                                h('span', { class: 'quick-panel-item-label' }, text(item.labelKey))
-                              ]
-                            )
-                          })
-                        )
+                          { class: 'quick-panel-items', role: 'listbox' },
+                          quickPanelVisibleEntries.value.length
+                            ? quickPanelVisibleEntries.value.map((entry, index) => {
+                                const isPinned = chatInputPinnedTools.value.includes(entry.id)
+                                return h(
+                                  'button',
+                                  {
+                                    class: [
+                                      'quick-panel-item',
+                                      {
+                                        'quick-panel-item-active': index === quickPanelActiveIndex.value,
+                                        'quick-panel-item-disabled': entry.disabled
+                                      }
+                                    ],
+                                    type: 'button',
+                                    role: 'option',
+                                    'aria-selected': index === quickPanelActiveIndex.value,
+                                    key: entry.id,
+                                    disabled: entry.disabled,
+                                    onMouseenter: () => {
+                                      quickPanelActiveIndex.value = index
+                                    },
+                                    onClick: () => activateQuickPanelEntry(entry)
+                                  },
+                                  [
+                                    h(
+                                      'span',
+                                      { class: 'quick-panel-item-icon' },
+                                      entry.icon ? renderComposerToolIcon(entry.icon) : '›'
+                                    ),
+                                    h('span', { class: 'quick-panel-item-text' }, [
+                                      h('span', { class: 'quick-panel-item-label' }, entry.label),
+                                      entry.description
+                                        ? h('span', { class: 'quick-panel-item-description' }, entry.description)
+                                        : undefined
+                                    ]),
+                                    isPinned
+                                      ? h('span', { class: 'quick-panel-item-badge' }, text('quickPanelPinned'))
+                                      : undefined,
+                                    entry.suffix
+                                      ? h('span', { class: 'quick-panel-item-suffix' }, entry.suffix)
+                                      : undefined,
+                                    entry.isMenu
+                                      ? h('span', { class: 'quick-panel-item-chevron', 'aria-hidden': 'true' }, '›')
+                                      : undefined
+                                  ]
+                                )
+                              })
+                            : h('p', { class: 'quick-panel-empty' }, text('knowledgeSearchNoResult'))
+                        ),
+                        // Footer hint bar mirrors the desktop panel's keyboard legend.
+                        h('p', { class: 'quick-panel-hint' }, text('quickPanelHint'))
                       ])
                     : undefined
                 ])
@@ -6084,7 +6447,7 @@ const App = defineComponent({
                           h(
                             'option',
                             { key: agent.id, value: agent.id },
-                            `${agent.name} · ${agent.modelName ?? agent.model}`
+                            `${agent.name} · ${stripModelNamePrefix(agent.modelName ?? agent.model ?? '')}`
                           )
                         )
                       ),

@@ -115,6 +115,21 @@ export type WebUiProcessGroup = {
   readonly items: readonly WebUiProcessItem[]
 }
 
+/**
+ * One completed (or in-flight) context compaction, mirroring the desktop
+ * `data-compaction-anchor` part. Rendered as a timeline marker that reports how
+ * much prompt space the fold reclaimed.
+ */
+export type WebUiCompactionAnchor = {
+  readonly id: string
+  readonly status: 'compacting' | 'done'
+  /** `in-loop` folds render inline in the process group; others render full-width. */
+  readonly phase?: string
+  /** Prompt size before/after the fold, when the path could measure both ends. */
+  readonly preTokens?: number
+  readonly postTokens?: number
+}
+
 export type WebUiMessageSnapshot = {
   readonly id: string
   readonly conversationId: string
@@ -124,6 +139,8 @@ export type WebUiMessageSnapshot = {
   readonly toolCalls?: readonly WebUiToolCallSnapshot[]
   /** Reasoning and tool calls grouped in their original message-part order. */
   readonly processGroups?: readonly WebUiProcessGroup[]
+  /** Context compactions that happened during this turn, in part order. */
+  readonly compactionAnchors?: readonly WebUiCompactionAnchor[]
   readonly agentStatusEvents?: readonly WebUiAgentStatusEvent[]
   readonly attachments?: readonly WebUiMessageAttachmentSnapshot[]
   /** Unique model id (`providerId::modelId`) when the assistant turn was created. */

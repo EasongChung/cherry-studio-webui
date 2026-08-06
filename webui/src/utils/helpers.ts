@@ -2,6 +2,7 @@ import type {
   WebUiAgentSessionEntity,
   WebUiAgentSessionMessageEntity,
   WebUiAgentStatusEvent,
+  WebUiCompactionAnchor,
   WebUiConversationSummary,
   WebUiCreateSessionWorkspace,
   WebUiMessagePart,
@@ -282,7 +283,9 @@ const HIDDEN_PROCESS_PART_TYPES = new Set([
   'data-citation',
   'data-agent-task-event',
   'data-knowledge-scope',
-  'data-clear'
+  'data-clear',
+  // Rendered as its own timeline marker, not as a process-group entry.
+  'data-compaction-anchor'
 ])
 
 const isToolMessagePart = (part: WebUiMessagePart) => part.type.startsWith('tool-') || part.type === 'dynamic-tool'
@@ -382,6 +385,24 @@ export const toAgentStatusEvents = (parts: readonly WebUiMessagePart[]): readonl
   }
 
   return events
+}
+
+/** Extract compaction anchors from message parts. */
+export const toCompactionAnchors = (parts: readonly WebUiMessagePart[]): readonly WebUiCompactionAnchor[] => {
+  const anchors: WebUiCompactionAnchor[] = []
+  for (const part of parts) {
+    if (part.type !== 'data-compaction-anchor' || !part.data || typeof part.data !== 'object') continue
+    const data = part.data as Record<string, unknown>
+    const status = data.status === 'compacting' || data.status === 'done' ? data.status : 'done'
+    anchors.push({
+      id: part.id ?? `compaction:${anchors.length}`,
+      status,
+      ...(typeof data.phase === 'string' ? { phase: data.phase } : {}),
+      ...(typeof data.preTokens === 'number' ? { preTokens: data.preTokens } : {}),
+      ...(typeof data.postTokens === 'number' ? { postTokens: data.postTokens } : {})
+    })
+  }
+  return anchors
 }
 
 export const upsertAgentStatusEvent = (
@@ -485,6 +506,7 @@ export const toMessageSnapshot = (message: WebUiAgentSessionMessageEntity): WebU
   const toolCalls = toToolCalls(parts)
   const processGroups = toProcessGroups(parts, message.id)
   const agentStatusEvents = toAgentStatusEvents(parts)
+  const compactionAnchors = toCompactionAnchors(parts)
   const attachments = parts
     .filter((part) => part.type === 'file')
     .map((part) => {
@@ -510,6 +532,7 @@ export const toMessageSnapshot = (message: WebUiAgentSessionMessageEntity): WebU
     ...(reasoning ? { reasoning } : {}),
     ...(toolCalls.length ? { toolCalls } : {}),
     ...(processGroups.length ? { processGroups } : {}),
+    ...(compactionAnchors.length ? { compactionAnchors } : {}),
     ...(agentStatusEvents.length ? { agentStatusEvents } : {}),
     ...(attachments.length ? { attachments } : {}),
     ...(modelId ? { modelId } : {}),
