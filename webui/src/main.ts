@@ -2937,7 +2937,7 @@ const App = defineComponent({
       syncTimer = window.setTimeout(() => {
         syncTimer = undefined
         void loadConversations()
-        if (reason === 'agent-permission-mode-updated') {
+        if (reason === 'agent-permission-mode-updated' || reason === 'agent-model-updated') {
           void loadAgents().catch(() => {
             /* ignore — label falls back until next manual refresh */
           })
@@ -5435,8 +5435,7 @@ const App = defineComponent({
                             },
                             renderComposerToolIcon('fastMode')
                           ),
-                          // Quick-panel lives at the toolbar's right edge; its pinned tools stay
-                          // inside the panel so the toolbar itself does not grow.
+                          // Quick-panel trigger button (stays inside the toolbar).
                           h('div', { class: 'composer-tools-quick-panel-slot' }, [
                             h(
                               'button',
@@ -5459,50 +5458,7 @@ const App = defineComponent({
                                 }
                               },
                               h('span', { class: 'quick-panel-trigger-icon' }, '+')
-                            ),
-                            quickPanelOpen.value
-                              ? h('div', {
-                                  class: 'quick-panel-overlay',
-                                  onClick: () => {
-                                    quickPanelOpen.value = false
-                                  }
-                                })
-                              : undefined,
-                            quickPanelOpen.value
-                              ? h('div', { class: 'quick-panel quick-panel-end' }, [
-                                  h('p', { class: 'quick-panel-title' }, text('quickPanel')),
-                                  h(
-                                    'div',
-                                    { class: 'quick-panel-items' },
-                                    (
-                                      [
-                                        { id: 'composer:new-conversation', labelKey: 'newConversationTool' as const },
-                                        { id: 'web-search', labelKey: 'knowledgeSearch' as const }
-                                      ] as const
-                                    ).map((item) => {
-                                      const isPinned = chatInputPinnedTools.value.includes(item.id)
-                                      return h(
-                                        'button',
-                                        {
-                                          class: ['quick-panel-item', { 'quick-panel-item-pinned': isPinned }],
-                                          type: 'button',
-                                          key: item.id,
-                                          onClick: () => {
-                                            const next = isPinned
-                                              ? chatInputPinnedTools.value.filter((id) => id !== item.id)
-                                              : [...chatInputPinnedTools.value, item.id]
-                                            void savePinnedTools(next)
-                                          }
-                                        },
-                                        [
-                                          h('span', { class: 'quick-panel-item-icon' }, isPinned ? '✓' : ''),
-                                          h('span', { class: 'quick-panel-item-label' }, text(item.labelKey))
-                                        ]
-                                      )
-                                    })
-                                  )
-                                ])
-                              : undefined
+                            )
                           ])
                         ]),
                         h(
@@ -5805,7 +5761,50 @@ const App = defineComponent({
                           ])
                         : undefined
                     ]
-                  )
+                  ),
+                  quickPanelOpen.value
+                    ? h('div', {
+                        class: 'quick-panel-overlay',
+                        onClick: () => {
+                          quickPanelOpen.value = false
+                        }
+                      })
+                    : undefined,
+                  quickPanelOpen.value
+                    ? h('div', { class: 'quick-panel quick-panel-end' }, [
+                        h('p', { class: 'quick-panel-title' }, text('quickPanel')),
+                        h(
+                          'div',
+                          { class: 'quick-panel-items' },
+                          (
+                            [
+                              { id: 'composer:new-conversation', labelKey: 'newConversationTool' as const },
+                              { id: 'web-search', labelKey: 'knowledgeSearch' as const }
+                            ] as const
+                          ).map((item) => {
+                            const isPinned = chatInputPinnedTools.value.includes(item.id)
+                            return h(
+                              'button',
+                              {
+                                class: ['quick-panel-item', { 'quick-panel-item-pinned': isPinned }],
+                                type: 'button',
+                                key: item.id,
+                                onClick: () => {
+                                  const next = isPinned
+                                    ? chatInputPinnedTools.value.filter((id) => id !== item.id)
+                                    : [...chatInputPinnedTools.value, item.id]
+                                  void savePinnedTools(next)
+                                }
+                              },
+                              [
+                                h('span', { class: 'quick-panel-item-icon' }, isPinned ? '✓' : ''),
+                                h('span', { class: 'quick-panel-item-label' }, text(item.labelKey))
+                              ]
+                            )
+                          })
+                        )
+                      ])
+                    : undefined
                 ])
               ]),
               statusPanelOpen.value
