@@ -1772,7 +1772,7 @@ const App = defineComponent({
                     'span',
                     `${usage.totalTokens.toLocaleString()} / ${usage.maxTokens.toLocaleString()} (${percentage}%)`
                   ),
-                  h('span', { title: usage.model }, usage.model)
+                  h('span', { title: stripModelNamePrefix(usage.model) }, stripModelNamePrefix(usage.model))
                 ]),
                 contextUsageCategories.value.length
                   ? h(
@@ -4235,6 +4235,18 @@ const App = defineComponent({
             closeOtherComposerPopovers()
             permissionModePickerOpen.value = true
           }
+        },
+        {
+          id: 'customToolbar',
+          label: text('customToolbar'),
+          description: text('customToolbarDescription'),
+          section: 'primary-tools',
+          isMenu: true,
+          action: () => {
+            quickPanelSubmenu.value = 'customToolbar'
+            quickPanelQuery.value = ''
+            quickPanelActiveIndex.value = 0
+          }
         }
       ]
 
@@ -4255,19 +4267,45 @@ const App = defineComponent({
       return entries
     })
 
-    /** Rows of the open submenu (currently only the skill drill-down). */
+    /** Rows of the open submenu — skill drill-down or custom-toolbar pin toggles. */
     const quickPanelSubmenuEntries = computed<readonly QuickPanelEntry[]>(() => {
-      if (quickPanelSubmenu.value !== 'skill') return []
-      return skills.value.map((skill) => ({
-        id: `skill:${skill.name}`,
-        label: skill.name,
-        ...(skill.description ? { description: skill.description } : {}),
-        section: 'resources' as const,
-        action: () => {
-          composerText.value = `${composerText.value}${composerText.value && !composerText.value.endsWith(' ') ? ' ' : ''}/${skill.name} `
-          composerTextarea.value?.focus()
-        }
-      }))
+      if (quickPanelSubmenu.value === 'skill') {
+        return skills.value.map((skill) => ({
+          id: `skill:${skill.name}`,
+          label: skill.name,
+          ...(skill.description ? { description: skill.description } : {}),
+          section: 'resources' as const,
+          action: () => {
+            composerText.value = `${composerText.value}${composerText.value && !composerText.value.endsWith(' ') ? ' ' : ''}/${skill.name} `
+            composerTextarea.value?.focus()
+          }
+        }))
+      }
+
+      if (quickPanelSubmenu.value === 'customToolbar') {
+        const pinableTools: Array<{ id: string; labelKey: TextKey }> = [
+          { id: 'skill', labelKey: 'skillLauncher' },
+          { id: 'knowledge', labelKey: 'knowledgeSearch' },
+          { id: 'compact', labelKey: 'compact' },
+          { id: 'fastMode', labelKey: 'fastMode' }
+        ]
+        return pinableTools.map((tool) => ({
+          id: `pin:${tool.id}`,
+          label: text(tool.labelKey),
+          suffix: chatInputPinnedTools.value.includes(tool.id) ? text('quickPanelPinned') : undefined,
+          section: 'resources' as const,
+          action: () => {
+            const current = chatInputPinnedTools.value
+            if (current.includes(tool.id)) {
+              void savePinnedTools(current.filter((id) => id !== tool.id))
+            } else {
+              void savePinnedTools([...current, tool.id])
+            }
+          }
+        }))
+      }
+
+      return []
     })
 
     /**
