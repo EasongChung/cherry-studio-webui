@@ -2857,11 +2857,11 @@
     display: flex;
     gap: 8px;
     align-items: center;
-    min-height: 36px;
-    padding: 0 10px;
+    min-height: 34px;
+    padding: 0 12px;
     cursor: pointer;
     list-style: none;
-    background: #f9fafb;
+    background: #f3f4f6;
   }
 
   .tool-call-group summary::-webkit-details-marker {
@@ -2887,33 +2887,51 @@
     color: #374151;
   }
 
-  .tool-call-group > .tool-call {
-    margin: 0;
+  .tool-call-group-body {
+    padding: 6px;
+  }
+
+  .tool-call-group-body .tool-call {
+    margin: 0 0 6px;
     border: none;
-    border-top: 1px solid #e5e7eb;
     border-radius: 0;
   }
 
+  .tool-call-group-body .tool-call:last-child {
+    margin-bottom: 0;
+  }
+
   .tool-call {
-    margin: 0 0 10px;
+    margin: 0 0 8px;
     color: #374151;
-    background: #f9fafb;
+    background: #f3f4f6;
     border: 1px solid #e5e7eb;
-    border-radius: 6px;
+    border-radius: 8px;
   }
 
   .tool-call summary {
     display: flex;
     gap: 8px;
     align-items: center;
-    min-height: 36px;
-    padding: 0 10px;
+    min-height: 34px;
+    padding: 0 12px;
     cursor: pointer;
     list-style: none;
   }
 
   .tool-call summary::-webkit-details-marker {
     display: none;
+  }
+
+  /* Compact emoji icon on the card's left edge, mirroring desktop tool cards. */
+  .tool-call-icon {
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 18px;
+    font-size: 14px;
+    line-height: 1;
   }
 
   .tool-state-indicator {
@@ -2994,11 +3012,26 @@
     white-space: nowrap;
   }
 
-  .tool-call-state {
-    margin-left: auto;
+  /* Sub-agent / task name surfaced from the tool input (secondary, truncating). */
+  .tool-call-task {
+    min-width: 0;
+    flex: 1 1 auto;
+    overflow: hidden;
     color: #6b7280;
     font-size: 12px;
-    text-transform: capitalize;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .tool-call-state {
+    margin-left: auto;
+    padding: 1px 8px;
+    color: #6b7280;
+    font-size: 11px;
+    font-weight: 500;
+    background: #e5e7eb;
+    border-radius: 999px;
+    white-space: nowrap;
   }
 
   .tool-call-body {
@@ -3008,13 +3041,19 @@
   .tool-call-data {
     max-height: 240px;
     margin: 0;
-    padding: 9px;
+    padding: 0;
     overflow: auto;
     color: #374151;
     font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-    white-space: pre-wrap;
     background: #ffffff;
     border: 1px solid #e5e7eb;
+    border-radius: 4px;
+  }
+
+  .tool-call-data pre {
+    margin: 0;
+    padding: 9px;
+    border: 0;
     border-radius: 4px;
   }
 

@@ -99,6 +99,7 @@ import {
   persistCollapsedWorkdirGroups,
   readFileAsDataUrl,
   resolveWorkspaceSeedFromConversation,
+  terminalToolStates,
   toConversationSummary,
   toDisplayText,
   toErrorMessage,
@@ -133,6 +134,7 @@ import {
   type SpeechVoiceOption
 } from './utils/speechSynthesis'
 import { contextCategoryTextKeys, type TextKey, textPacks } from './utils/textPacks'
+import { getToolPresentation, getToolTaskDescription } from './utils/toolPresentation'
 import {
   buildWorkspaceSearchTree,
   getWorkspaceCodeLanguage,
@@ -992,8 +994,14 @@ const App = defineComponent({
       Boolean(message.processGroups?.length || message.reasoning || message.toolCalls?.length)
     const getProcessSummary = (message: WebUiMessageSnapshot) => {
       processElapsedTick.value
-      if (message.status !== 'pending' && message.processingTimeMs) {
-        return `${text('processingTime')} ${formatDuration(message.processingTimeMs)}`
+      // Completed: mirror the desktop "已处理 N 个工具 · 用时 X" single-row summary.
+      if (message.status !== 'pending') {
+        const toolCount = message.toolCalls?.length ?? 0
+        const action = toolCount
+          ? text('toolCallsProcessed').replace('{{count}}', String(toolCount))
+          : text('reasoning')
+        const duration = message.processingTimeMs ? formatDuration(message.processingTimeMs) : undefined
+        return duration ? `${action} · ${duration}` : action
       }
       // Match desktop live progress: keep one stable process label and append elapsed time while streaming.
       if (message.status === 'pending') {
@@ -1001,8 +1009,6 @@ const App = defineComponent({
         const elapsed = Number.isFinite(startedAt) ? formatDuration(Math.max(0, Date.now() - startedAt)) : undefined
         return elapsed ? `${text('processDetails')} · ${elapsed}` : text('processDetails')
       }
-      if (message.toolCalls?.length)
-        return `${text('processDetails')} · ${message.toolCalls.length} ${text('toolCalls')}`
       return text('reasoning')
     }
     const approvalKey = (messageId: string, toolId: string) => `${messageId}:${toolId}`
@@ -1238,43 +1244,101 @@ const App = defineComponent({
             'div',
             { class: 'process-history' },
             processGroups.length
-              ? processGroups.map((group) =>
-                  h(
+              ? processGroups.map((group) => {
+                  // Merge consecutive tool items into one collapsible group, mirroring the
+                  // desktop ToolBlockGroup. Reasoning items stay separate so narration reads
+                  // in order with the tools it justifies.
+                  const rows: Array<
+                    | { kind: 'reasoning'; item: Extract<WebUiProcessItem, { kind: 'reasoning' }> }
+                    | { kind: 'tool-group'; tools: readonly WebUiToolCallSnapshot[] }
+                  > = []
+                  let toolRun: WebUiToolCallSnapshot[] = []
+                  const flushToolRun = () => {
+                    if (!toolRun.length) return
+                    rows.push({ kind: 'tool-group', tools: toolRun })
+                    toolRun = []
+                  }
+                  for (const item of group.items) {
+                    if (item.kind === 'reasoning') {
+                      flushToolRun()
+                      rows.push({ kind: 'reasoning', item })
+                    } else {
+                      toolRun.push(item.tool)
+                    }
+                  }
+                  flushToolRun()
+
+                  return h(
                     'div',
                     { class: 'process-history-group', key: group.id },
-                    group.items.map((item: WebUiProcessItem) => {
-                      if (item.kind === 'reasoning') {
-                        return h('details', { class: 'reasoning-block', key: item.id, open: item.isStreaming }, [
-                          h('summary', [
-                            h('span', { class: 'process-item-indicator', 'aria-hidden': 'true' }),
-                            h('span', text('reasoning'))
-                          ]),
-                          h('div', {
-                            class: 'markdown-content process-reasoning-content',
-                            onClick: handleMarkdownContentClick,
-                            innerHTML: renderMarkdown(item.content, {
-                              copyCodeLabel: text('copyCode'),
-                              downloadCodeLabel: text('downloadSource'),
-                              wrapLinesLabel: text('wrapLines')
+                    rows.map((row) => {
+                      if (row.kind === 'reasoning') {
+                        return h(
+                          'details',
+                          { class: 'reasoning-block', key: row.item.id, open: row.item.isStreaming },
+                          [
+                            h('summary', [
+                              h('span', { class: 'process-item-indicator', 'aria-hidden': 'true' }),
+                              h('span', text('reasoning'))
+                            ]),
+                            h('div', {
+                              class: 'markdown-content process-reasoning-content',
+                              onClick: handleMarkdownContentClick,
+                              innerHTML: renderMarkdown(row.item.content, {
+                                copyCodeLabel: text('copyCode'),
+                                downloadCodeLabel: text('downloadSource'),
+                                wrapLinesLabel: text('wrapLines')
+                              })
                             })
-                          })
-                        ])
+                          ]
+                        )
                       }
 
-                      const tool = item.tool
-                      return h(ToolCallBlock, {
-                        key: item.id,
-                        tool,
-                        message,
-                        text,
-                        submitting: isApprovalSubmitting(message.id, tool.id),
-                        approvalError: approvalErrorByKey.value[approvalKey(message.id, tool.id)],
-                        onApprove: () => void respondToolApproval(tool, message, true),
-                        onDeny: () => void respondToolApproval(tool, message, false)
-                      })
+                      const renderTool = (tool: WebUiToolCallSnapshot) =>
+                        h(ToolCallBlock, {
+                          key: tool.id,
+                          tool,
+                          message,
+                          text,
+                          submitting: isApprovalSubmitting(message.id, tool.id),
+                          approvalError: approvalErrorByKey.value[approvalKey(message.id, tool.id)],
+                          onApprove: () => void respondToolApproval(tool, message, true),
+                          onDeny: () => void respondToolApproval(tool, message, false)
+                        })
+
+                      // Single tool stays a bare card; multiple consecutive tools collapse.
+                      if (row.tools.length === 1) return renderTool(row.tools[0]!)
+                      const anyActive = row.tools.some(
+                        (tool) => message.status === 'pending' && !terminalToolStates.has(tool.state)
+                      )
+                      const latest = row.tools[row.tools.length - 1]!
+                      const presentation = getToolPresentation(latest.name)
+                      const latestTask = getToolTaskDescription(latest.name, latest.input)
+                      return h(
+                        'details',
+                        {
+                          class: ['tool-call-group', { 'tool-call-group-pending': anyActive }],
+                          key: `group:${row.tools.map((tool) => tool.id).join('|')}`,
+                          ...(anyActive ? { open: true } : {})
+                        },
+                        [
+                          h('summary', [
+                            h('span', { class: 'tool-call-group-indicator', 'aria-hidden': 'true' }),
+                            h('span', { class: 'tool-call-icon', 'aria-hidden': 'true' }, presentation.icon),
+                            h(
+                              'span',
+                              { class: 'tool-call-group-summary' },
+                              latestTask
+                                ? `${text(presentation.labelKey)} · ${latestTask}`
+                                : `${text(presentation.labelKey)} · ${row.tools.length}`
+                            )
+                          ]),
+                          h('div', { class: 'tool-call-group-body' }, row.tools.map(renderTool))
+                        ]
+                      )
                     })
                   )
-                )
+                })
               : message.reasoning
                 ? [
                     h('details', { class: 'reasoning-block', open: isThinking }, [
