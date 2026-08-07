@@ -570,10 +570,15 @@
   }
 
   .conversation-item:hover,
-  .conversation-item-selected,
   .conversation-item-wrap:focus-within .conversation-item {
     background: #eef2ff;
     border-color: #a5b4fc;
+  }
+
+  .conversation-item-selected {
+    background: #dbeafe;
+    border-color: #6366f1;
+    border-left: 3px solid #6366f1;
   }
 
   .conversation-actions {
@@ -2353,6 +2358,22 @@
   .markdown-content {
     overflow-wrap: anywhere;
     overflow-x: auto;
+  }
+
+  /* Read-aloud sentence spans: subtle hover affordance, bold highlight while spoken. */
+  .speech-sentence {
+    cursor: pointer;
+    border-radius: 3px;
+    transition: background-color 160ms ease, box-shadow 160ms ease;
+  }
+
+  .speech-sentence:hover {
+    background: rgb(99 102 241 / 10%);
+  }
+
+  .speech-sentence-active {
+    background: rgb(99 102 241 / 16%);
+    box-shadow: 0 0 0 1px rgb(99 102 241 / 30%);
   }
 
   .markdown-content > :first-child {
@@ -4239,7 +4260,7 @@
     z-index: 6;
     right: 8px;
     bottom: calc(100% + 8px);
-    width: clamp(220px, 32%, 300px);
+    width: clamp(280px, 40%, 450px);
     display: grid;
     max-height: min(276px, 42dvh);
     overflow-y: auto;
@@ -4857,10 +4878,15 @@
       border-color: #475569;
     }
 
-    .conversation-item:hover,
-    .conversation-item-selected {
+    .conversation-item:hover {
       background: #263b5b;
       border-color: #60a5fa;
+    }
+
+    .conversation-item-selected {
+      background: #1e3a5f;
+      border-color: #7dd3fc;
+      border-left: 3px solid #60a5fa;
     }
 
     .conversation-title,
@@ -5281,6 +5307,15 @@
     background: #1e293b;
   }
 
+  :root[data-webui-theme='dark'] .speech-sentence:hover {
+    background: rgb(96 165 250 / 12%);
+  }
+
+  :root[data-webui-theme='dark'] .speech-sentence-active {
+    background: rgb(96 165 250 / 22%);
+    box-shadow: 0 0 0 1px rgb(96 165 250 / 40%);
+  }
+
   :root[data-webui-theme='dark'] .message-attachment-link {
     color: #93c5fd;
     text-decoration-color: rgb(147 197 253 / 40%);
@@ -5292,7 +5327,6 @@
   }
 
   :root[data-webui-theme='dark'] .conversation-item:hover,
-  :root[data-webui-theme='dark'] .conversation-item-selected,
   :root[data-webui-theme='dark'] .conversation-item-wrap:focus-within .conversation-item,
   :root[data-webui-theme='dark'] .conversation-action-button:hover,
   :root[data-webui-theme='dark'] .conversation-action-button:focus-visible,
@@ -5320,6 +5354,12 @@
   :root[data-webui-theme='dark'] .slash-command-option:hover,
   :root[data-webui-theme='dark'] .theme-toggle-button:hover {
     background: #334155;
+  }
+
+  :root[data-webui-theme='dark'] .conversation-item-selected {
+    background: #1e3a5f;
+    border-color: #7dd3fc;
+    border-left: 3px solid #60a5fa;
   }
 
   :root[data-webui-theme='dark'] .skill-picker-option,
@@ -5843,7 +5883,6 @@
   }
 
   :root[data-webui-theme='light'] .conversation-item:hover,
-  :root[data-webui-theme='light'] .conversation-item-selected,
   :root[data-webui-theme='light'] .conversation-group-toggle:hover,
   :root[data-webui-theme='light'] .conversation-group-toggle:focus-visible,
   :root[data-webui-theme='light'] .conversation-group-create:hover,

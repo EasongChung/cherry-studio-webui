@@ -117,6 +117,7 @@ import {
   renderThemeIcon
 } from './utils/icons'
 import { renderCode, renderMarkdown } from './utils/renderMarkdown'
+import { annotateSpeechSentences } from './utils/speechHighlight'
 import {
   createSpeechSynthesisController,
   DEFAULT_SPEECH_PREFERENCES,
@@ -376,6 +377,28 @@ const App = defineComponent({
       },
       getPreferences: () => speechPreferences.value
     })
+    /** Plain (markdown-stripped) text of each rendered message, so speech segment
+     *  indices align 1:1 with the `.speech-sentence` spans stamped on the DOM. */
+    const speechPlainTextCache = new Map<string, string>()
+    /**
+     * Highlight the currently spoken sentence. The spans live inside the rendered
+     * markdown (innerHTML), so class updates must happen on the live DOM after render.
+     */
+    watch(speechState, (state) => {
+      void nextTick(() => {
+        document.querySelectorAll('.speech-sentence-active').forEach((element) => {
+          element.classList.remove('speech-sentence-active')
+        })
+        if (!state.isSpeaking || !state.messageId) return
+        const container = document.querySelector<HTMLElement>(
+          `.markdown-content[data-message-id="${CSS.escape(state.messageId)}"]`
+        )
+        const sentence = container?.querySelector<HTMLElement>(
+          `.speech-sentence[data-sentence-index="${state.segmentIndex}"]`
+        )
+        sentence?.classList.add('speech-sentence-active')
+      })
+    })
     const pendingChunks = new Map<string, WebUiChunkPayload[]>()
     const pendingChunkRetries = new Map<string, number>()
     /** Assistant turns that finished streaming — ignore late text/reasoning deltas (prevents duplicate body after long thinking). */
@@ -629,6 +652,22 @@ const App = defineComponent({
     const text = (key: TextKey) => {
       const pack = textPacks[language.value as keyof typeof textPacks] ?? textPacks[fallbackLanguage]
       return pack[key] ?? textPacks[fallbackLanguage][key]
+    }
+
+    /**
+     * Render message markdown and annotate speakable sentences. The cache entry lets
+     * read-aloud start from the exact same plain text that the sentence spans were
+     * built from, so `segmentIndex` matches the `data-sentence-index` on the DOM.
+     */
+    const renderSpeechMarkdown = (
+      content: string,
+      messageId: string,
+      options: Parameters<typeof renderMarkdown>[1]
+    ): string => {
+      const html = renderMarkdown(content, options)
+      const annotated = annotateSpeechSentences(html)
+      speechPlainTextCache.set(messageId, annotated.plainText)
+      return annotated.html
     }
 
     const conversationGroups = computed(() => buildConversationGroups(conversations.value, text('noProject')))
@@ -1673,6 +1712,27 @@ const App = defineComponent({
     }
 
     const handleMarkdownContentClick = (event: MouseEvent) => {
+      // Clicking a sentence span starts read-aloud from that sentence.
+      const sentence =
+        event.target instanceof Element ? event.target.closest<HTMLElement>('[data-sentence-index]') : null
+      if (sentence) {
+        const messageElement = sentence.closest<HTMLElement>('[data-message-id]')
+        const messageId = messageElement?.dataset.messageId
+        const index = Number(sentence.dataset.sentenceIndex)
+        if (messageId && Number.isInteger(index) && index >= 0) {
+          const message = messages.value.find((item) => item.id === messageId)
+          if (message && message.content.trim()) {
+            event.preventDefault()
+            if (speechState.value.messageId === messageId && speechState.value.isSpeaking) {
+              speechController.jumpToSegment(index)
+            } else {
+              toggleReadMessageAloud(message, index)
+            }
+          }
+        }
+        return
+      }
+
       const target =
         event.target instanceof Element
           ? event.target.closest<HTMLElement>(
@@ -3713,7 +3773,7 @@ const App = defineComponent({
       }
     }
 
-    const toggleReadMessageAloud = (message: WebUiMessageSnapshot) => {
+    const toggleReadMessageAloud = (message: WebUiMessageSnapshot, startIndex = 0) => {
       if (!speechController.refreshSupport()) {
         showSpeechNotice(text('speechUnavailable'), message.id)
         return
@@ -3729,7 +3789,10 @@ const App = defineComponent({
       if (speechPanelPreferences.value.autoOpenPanel) {
         openSpeechPanel()
       }
-      speechController.speak(message.id, message.content, language.value)
+      // Speak the rendered plain text (the same text the sentence spans were built from)
+      // so `segmentIndex` aligns with the `data-sentence-index` on the DOM.
+      const plainText = speechPlainTextCache.get(message.id) ?? message.content
+      speechController.speak(message.id, plainText, language.value, startIndex)
     }
 
     const formatCompactNumber = (value: number): string => {
@@ -5428,8 +5491,9 @@ const App = defineComponent({
                           message.content
                             ? h('div', {
                                 class: 'markdown-content',
+                                'data-message-id': message.id,
                                 onClick: handleMarkdownContentClick,
-                                innerHTML: renderMarkdown(message.content, {
+                                innerHTML: renderSpeechMarkdown(message.content, message.id, {
                                   copyCodeLabel: text('copyCode'),
                                   downloadCodeLabel: text('downloadSource'),
                                   wrapLinesLabel: text('wrapLines')

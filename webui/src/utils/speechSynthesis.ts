@@ -412,13 +412,13 @@ export const createSpeechSynthesisController = ({
     return true
   }
 
-  const speak = (messageId: string, text: string, nextLanguage: string) => {
-    // Toggle stop when the same message is already speaking/paused.
-    if (currentMessageId === messageId && (activeUtterance || isPaused)) {
+  const speak = (messageId: string, text: string, nextLanguage: string, startIndex = 0) => {
+    // Toggle stop when the same message is already speaking/paused from the beginning.
+    if (startIndex === 0 && currentMessageId === messageId && (activeUtterance || isPaused)) {
       stop()
       return true
     }
-    return beginSession(messageId, text, nextLanguage, 0)
+    return beginSession(messageId, text, nextLanguage, startIndex)
   }
 
   const preview = (text: string, nextLanguage: string) => beginSession('__speech_preview__', text, nextLanguage, 0)
@@ -544,6 +544,7 @@ export const createSpeechSynthesisController = ({
     nextSentence,
     previousParagraph,
     nextParagraph,
+    jumpToSegment,
     applyLivePreferences,
     getState
   }
