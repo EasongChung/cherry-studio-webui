@@ -1,9 +1,9 @@
 name: Build Cherry Studio WebUI Windows
 
-# Fork-only: builds on push to webui or manual (workflow_dispatch).
+# Fork-only: builds on push to webui or main, or manual (workflow_dispatch).
 on:
   push:
-    branches: [webui]
+    branches: [webui, main]
   workflow_dispatch:
     inputs:
       release_tag:
