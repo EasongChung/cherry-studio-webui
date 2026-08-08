@@ -1203,13 +1203,11 @@ const App = defineComponent({
       const previewText = isThinking ? (message.reasoning ?? '').replace(/\s+/g, ' ').trim() : ''
       const showRollingPreview = isThinking && previewText.length > 0
       const openOverride = processOpenOverrides.value.get(message.id)
-      // Strictly follow the desktop auto-collapse preference: when enabled (default), the process block
-      // stays folded while streaming and the latest reasoning sliver rolls in the summary row instead;
-      // when disabled, streaming auto-expands so reasoning/tools render live (user clicks win via override).
-      const isProcessOpen =
-        openOverride !== undefined
-          ? openOverride
-          : isThinking && !thoughtAutoCollapse.value && Boolean(message.reasoning)
+      // Mirror the desktop: while the turn is live the whole process (thinking + tools)
+      // is expanded and streams in order; once completed it collapses into a single row
+      // summary. The thoughtAutoCollapse preference governs the reasoning block inside,
+      // not the process container itself (user clicks win via override).
+      const isProcessOpen = openOverride !== undefined ? openOverride : isThinking
 
       return h(
         'details',
@@ -1273,25 +1271,24 @@ const App = defineComponent({
                     { class: 'process-history-group', key: group.id },
                     rows.map((row) => {
                       if (row.kind === 'reasoning') {
-                        return h(
-                          'details',
-                          { class: 'reasoning-block', key: row.item.id, open: row.item.isStreaming },
-                          [
-                            h('summary', [
-                              h('span', { class: 'process-item-indicator', 'aria-hidden': 'true' }),
-                              h('span', text('reasoning'))
-                            ]),
-                            h('div', {
-                              class: 'markdown-content process-reasoning-content',
-                              onClick: handleMarkdownContentClick,
-                              innerHTML: renderMarkdown(row.item.content, {
-                                copyCodeLabel: text('copyCode'),
-                                downloadCodeLabel: text('downloadSource'),
-                                wrapLinesLabel: text('wrapLines')
-                              })
+                        // Desktop ThinkingBlock defaults folded; the auto-collapse preference
+                        // forces it closed while streaming so the summary sliver rolls instead.
+                        const reasoningOpen = !thoughtAutoCollapse.value && row.item.isStreaming
+                        return h('details', { class: 'reasoning-block', key: row.item.id, open: reasoningOpen }, [
+                          h('summary', [
+                            h('span', { class: 'process-item-indicator', 'aria-hidden': 'true' }),
+                            h('span', text('reasoning'))
+                          ]),
+                          h('div', {
+                            class: 'markdown-content process-reasoning-content',
+                            onClick: handleMarkdownContentClick,
+                            innerHTML: renderMarkdown(row.item.content, {
+                              copyCodeLabel: text('copyCode'),
+                              downloadCodeLabel: text('downloadSource'),
+                              wrapLinesLabel: text('wrapLines')
                             })
-                          ]
-                        )
+                          })
+                        ])
                       }
 
                       const renderTool = (tool: WebUiToolCallSnapshot) =>
@@ -1784,14 +1781,11 @@ const App = defineComponent({
         const messageId = messageElement?.dataset.messageId
         const index = Number(sentence.dataset.sentenceIndex)
         if (messageId && Number.isInteger(index) && index >= 0) {
-          const message = messages.value.find((item) => item.id === messageId)
-          if (message && message.content.trim()) {
+          // Sentence-click only rewinds the read-aloud session once the user has
+          // started reading via the message footer button — a bare click does nothing.
+          if (speechState.value.messageId === messageId && speechState.value.isSpeaking) {
             event.preventDefault()
-            if (speechState.value.messageId === messageId && speechState.value.isSpeaking) {
-              speechController.jumpToSegment(index)
-            } else {
-              toggleReadMessageAloud(message, index)
-            }
+            speechController.jumpToSegment(index)
           }
         }
         return
