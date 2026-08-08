@@ -1398,7 +1398,19 @@ const App = defineComponent({
     /** A single inline content block, rendered in its original stream order. */
     const renderContentBlock = (block: WebUiContentBlock, message: WebUiMessageSnapshot) => {
       if (block.kind === 'reasoning') {
-        return renderReasoningBlock(block.id, block.content, block.isStreaming)
+        // Render intermediate reasoning as inline process narration (matching the desktop),
+        // not as a collapsible "已深度思考" thinking block.
+        return h(
+          'div',
+          { class: 'process-narration markdown-content', key: block.id, onClick: handleMarkdownContentClick },
+          {
+            innerHTML: renderMarkdown(block.content, {
+              copyCodeLabel: text('copyCode'),
+              downloadCodeLabel: text('downloadSource'),
+              wrapLinesLabel: text('wrapLines')
+            })
+          }
+        )
       }
       if (block.kind === 'tool') {
         return renderToolCard(block.tool, message)
