@@ -892,7 +892,7 @@
     top: calc(100% + 6px);
     left: 0;
     min-width: 200px;
-    max-width: min(360px, calc(100vw - 32px));
+    max-width: min(675px, calc(100vw - 32px));
     display: grid;
     max-height: min(276px, 42dvh);
     overflow-y: auto;
@@ -2360,14 +2360,18 @@
     overflow-x: auto;
   }
 
-  /* Read-aloud sentence spans: subtle hover affordance, bold highlight while spoken. */
+  /* Read-aloud sentence spans: hover affordance only while that message is being
+     read aloud — a bare (non-reading) message shows no selection affordance. */
   .speech-sentence {
-    cursor: pointer;
     border-radius: 3px;
     transition: background-color 160ms ease, box-shadow 160ms ease;
   }
 
-  .speech-sentence:hover {
+  .markdown-content[data-reading] .speech-sentence {
+    cursor: pointer;
+  }
+
+  .markdown-content[data-reading] .speech-sentence:hover {
     background: rgb(99 102 241 / 10%);
   }
 
@@ -2805,6 +2809,22 @@
     background: #f9fafb;
     border-left: 2px solid #cbd5e1;
     border-radius: 4px;
+  }
+
+  /* Inline prose spoken during the process (between tool calls), lighter than the final answer. */
+  .process-narration {
+    margin: 0 0 8px;
+    color: #4b5563;
+    font-size: 13px;
+    line-height: 1.55;
+  }
+
+  .process-narration > :first-child {
+    margin-top: 0;
+  }
+
+  .process-narration > :last-child {
+    margin-bottom: 0;
   }
 
   .process-history .reasoning-block,
@@ -5312,6 +5332,10 @@
     border-left-color: #475569;
   }
 
+  :root[data-webui-theme='dark'] .process-narration {
+    color: #9ca3af;
+  }
+
   :root[data-webui-theme='dark'] .tool-call-group-summary {
     color: #e5e7eb;
   }
@@ -5346,7 +5370,7 @@
     background: #1e293b;
   }
 
-  :root[data-webui-theme='dark'] .speech-sentence:hover {
+  :root[data-webui-theme='dark'] .markdown-content[data-reading] .speech-sentence:hover {
     background: rgb(96 165 250 / 12%);
   }
 

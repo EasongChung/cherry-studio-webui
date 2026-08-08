@@ -130,6 +130,18 @@ export type WebUiCompactionAnchor = {
   readonly postTokens?: number
 }
 
+/**
+ * One ordered content block of an assistant turn, mirroring the desktop message
+ * part layout: reasoning, prose and tool calls are rendered IN LINE in the order
+ * they streamed, rather than folded into separate pools. Only the final prose
+ * tail is the "answer"; everything before it is process history that collapses
+ * once the turn completes.
+ */
+export type WebUiContentBlock =
+  | { readonly kind: 'reasoning'; readonly id: string; readonly content: string; readonly isStreaming?: boolean }
+  | { readonly kind: 'text'; readonly id: string; readonly content: string; readonly isStreaming?: boolean }
+  | { readonly kind: 'tool'; readonly id: string; readonly tool: WebUiToolCallSnapshot }
+
 export type WebUiMessageSnapshot = {
   readonly id: string
   readonly conversationId: string
@@ -139,6 +151,8 @@ export type WebUiMessageSnapshot = {
   readonly toolCalls?: readonly WebUiToolCallSnapshot[]
   /** Reasoning and tool calls grouped in their original message-part order. */
   readonly processGroups?: readonly WebUiProcessGroup[]
+  /** Every reasoning/text/tool part in streaming order — drives the live interleaved layout. */
+  readonly contentBlocks?: readonly WebUiContentBlock[]
   /** Context compactions that happened during this turn, in part order. */
   readonly compactionAnchors?: readonly WebUiCompactionAnchor[]
   readonly agentStatusEvents?: readonly WebUiAgentStatusEvent[]

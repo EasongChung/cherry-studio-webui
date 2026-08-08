@@ -29,6 +29,7 @@ import type {
   WebUiAgentWorkspace,
   WebUiAuthStatusResponse,
   WebUiChunkPayload,
+  WebUiContentBlock,
   WebUiContextUsage,
   WebUiContextUsageResponse,
   WebUiConversationSummary,
@@ -89,6 +90,8 @@ import {
   webUiVersion
 } from './utils/constants'
 import {
+  appendContentReasoning,
+  appendContentText,
   appendProcessReasoning,
   buildConversationGroups,
   conversationGroupKey,
@@ -105,6 +108,7 @@ import {
   toErrorMessage,
   toMessageSnapshot,
   upsertAgentStatusEvent,
+  upsertContentTool,
   upsertProcessTool
 } from './utils/helpers'
 import {
@@ -1355,6 +1359,165 @@ const App = defineComponent({
           )
         ]
       )
+    }
+
+    const renderReasoningBlock = (id: string, content: string, isStreaming: boolean | undefined, open?: boolean) => {
+      // Desktop ThinkingBlock defaults folded; the auto-collapse preference forces it
+      // closed while streaming so the summary sliver rolls instead. Completed blocks
+      // stay foldable by the user.
+      const reasoningOpen = open ?? (!thoughtAutoCollapse.value && isStreaming)
+      return h('details', { class: 'reasoning-block', key: id, open: reasoningOpen }, [
+        h('summary', [
+          h('span', { class: 'process-item-indicator', 'aria-hidden': 'true' }),
+          h('span', text('reasoning'))
+        ]),
+        h('div', {
+          class: 'markdown-content process-reasoning-content',
+          onClick: handleMarkdownContentClick,
+          innerHTML: renderMarkdown(content, {
+            copyCodeLabel: text('copyCode'),
+            downloadCodeLabel: text('downloadSource'),
+            wrapLinesLabel: text('wrapLines')
+          })
+        })
+      ])
+    }
+
+    const renderToolCard = (tool: WebUiToolCallSnapshot, message: WebUiMessageSnapshot) =>
+      h(ToolCallBlock, {
+        key: tool.id,
+        tool,
+        message,
+        text,
+        submitting: isApprovalSubmitting(message.id, tool.id),
+        approvalError: approvalErrorByKey.value[approvalKey(message.id, tool.id)],
+        onApprove: () => void respondToolApproval(tool, message, true),
+        onDeny: () => void respondToolApproval(tool, message, false)
+      })
+
+    /** A single inline content block, rendered in its original stream order. */
+    const renderContentBlock = (block: WebUiContentBlock, message: WebUiMessageSnapshot) => {
+      if (block.kind === 'reasoning') {
+        return renderReasoningBlock(block.id, block.content, block.isStreaming)
+      }
+      if (block.kind === 'tool') {
+        return renderToolCard(block.tool, message)
+      }
+      // Non-final prose rendered inline as process narration (lightweight).
+      return h(
+        'div',
+        { class: 'process-narration markdown-content', key: block.id, onClick: handleMarkdownContentClick },
+        {
+          innerHTML: renderMarkdown(block.content, {
+            copyCodeLabel: text('copyCode'),
+            downloadCodeLabel: text('downloadSource'),
+            wrapLinesLabel: text('wrapLines')
+          })
+        }
+      )
+    }
+
+    /**
+     * Render an assistant turn's body from its ordered content blocks, mirroring the
+     * desktop layout: while the turn is live, reasoning, prose and tool cards render
+     * IN LINE in streaming order; once completed, all non-final blocks collapse into a
+     * single-row process container and only the final prose tail stays outside it.
+     */
+    const renderMessageContentBlocks = (message: WebUiMessageSnapshot) => {
+      const blocks = message.contentBlocks
+      if (!blocks?.length) return undefined
+
+      const isThinking = message.status === 'pending'
+      // The last text block is the final answer; everything before it is process history.
+      let lastTextIndex = -1
+      for (let index = blocks.length - 1; index >= 0; index--) {
+        if (blocks[index]?.kind === 'text') {
+          lastTextIndex = index
+          break
+        }
+      }
+      const processBlocks = lastTextIndex >= 0 ? blocks.slice(0, lastTextIndex) : blocks
+      const lastBlock = lastTextIndex >= 0 ? blocks[lastTextIndex] : undefined
+      const finalText = lastBlock?.kind === 'text' ? lastBlock : undefined
+
+      // Live turn: render process blocks inline in order, then the streaming answer tail.
+      if (isThinking) {
+        const nodes = [...processBlocks.map((block) => renderContentBlock(block, message))]
+        if (finalText) {
+          nodes.push(
+            h('div', {
+              class: 'markdown-content',
+              'data-message-id': message.id,
+              ...(speechState.value.messageId === message.id && speechState.value.isSpeaking
+                ? { 'data-reading': '' }
+                : {}),
+              onClick: handleMarkdownContentClick,
+              innerHTML: renderSpeechMarkdown(finalText.content, message.id, {
+                copyCodeLabel: text('copyCode'),
+                downloadCodeLabel: text('downloadSource'),
+                wrapLinesLabel: text('wrapLines')
+              })
+            })
+          )
+        }
+        return nodes
+      }
+
+      // Completed turn: fold process blocks into a single-row container; answer stays out.
+      const openOverride = processOpenOverrides.value.get(message.id)
+      const isProcessOpen = openOverride !== undefined ? openOverride : false
+      const nodes: VNode[] = []
+      if (processBlocks.length) {
+        nodes.push(
+          h(
+            'details',
+            {
+              class: 'process-block',
+              ...(isProcessOpen ? { open: true } : {})
+            },
+            [
+              h(
+                'summary',
+                {
+                  onClick: (event: MouseEvent) => {
+                    const details = (event.currentTarget as HTMLElement).closest('details')
+                    const next = new Map(processOpenOverrides.value)
+                    next.set(message.id, !(details?.open ?? false))
+                    processOpenOverrides.value = next
+                  }
+                },
+                [
+                  h('span', { class: 'process-state-indicator', 'aria-hidden': 'true' }),
+                  h('span', { class: 'process-summary' }, getProcessSummary(message))
+                ]
+              ),
+              h(
+                'div',
+                { class: 'process-history' },
+                processBlocks.map((block) => renderContentBlock(block, message))
+              )
+            ]
+          )
+        )
+      }
+      if (finalText) {
+        nodes.push(
+          h('div', {
+            class: 'markdown-content',
+            'data-message-id': message.id,
+            ...(speechState.value.messageId === message.id && speechState.value.isSpeaking
+              ? { 'data-reading': '' }
+              : {}),
+            onClick: handleMarkdownContentClick,
+            innerHTML: renderSpeechMarkdown(finalText.content, message.id, {
+              copyCodeLabel: text('copyCode'),
+              downloadCodeLabel: text('downloadSource'),
+              wrapLinesLabel: text('wrapLines')
+            })
+          })
+        )
+      }
+      return nodes
     }
 
     const workspaceApiPath = (route: 'files' | 'file' | 'preview', requestPath = '', search = '') => {
@@ -3197,7 +3360,11 @@ const App = defineComponent({
         // Terminal or already-authoritative rows must not keep appending (duplicate body after long thinking).
         if (streamSealed) return true
         if (message.content.endsWith(chunk.delta)) return true
-        nextMessages[messageIndex] = { ...message, content: `${message.content}${chunk.delta}` }
+        nextMessages[messageIndex] = {
+          ...message,
+          content: `${message.content}${chunk.delta}`,
+          contentBlocks: appendContentText(message.contentBlocks ?? [], message.id, chunk.delta)
+        }
       } else if (chunk.type === 'reasoning-delta' && chunk.delta) {
         if (streamSealed) return true
         const previousReasoning = message.reasoning ?? ''
@@ -3205,7 +3372,8 @@ const App = defineComponent({
         nextMessages[messageIndex] = {
           ...message,
           reasoning: `${previousReasoning}${chunk.delta}`,
-          processGroups: appendProcessReasoning(message.processGroups ?? [], message.id, chunk.delta)
+          processGroups: appendProcessReasoning(message.processGroups ?? [], message.id, chunk.delta),
+          contentBlocks: appendContentReasoning(message.contentBlocks ?? [], message.id, chunk.delta)
         }
         scrollThinkingPreview()
       } else if (chunk.type === 'data-agent-task-event' && isWebUiAgentTaskEventData(chunk.data)) {
@@ -3282,6 +3450,7 @@ const App = defineComponent({
           ...message,
           toolCalls: [...previousTools.filter((tool) => tool.id !== chunk.toolCallId), nextTool],
           processGroups: upsertProcessTool(message.processGroups ?? [], message.id, nextTool),
+          contentBlocks: upsertContentTool(message.contentBlocks ?? [], message.id, nextTool),
           agentStatusEvents: upsertAgentStatusEvent(previousStatusEvents, {
             kind: 'tool',
             id: chunk.toolCallId,
@@ -5517,49 +5686,91 @@ const App = defineComponent({
                           h('header', { class: 'message-header' }, [
                             h('p', { class: 'message-role' }, messageHeaderLabel(message))
                           ]),
-                          renderProcessDetails(message),
-                          renderCompactionAnchors(message),
-                          message.attachments?.length
-                            ? h(
-                                'div',
-                                { class: 'message-attachments' },
-                                message.attachments.map((attachment) =>
-                                  attachment.fileEntryId
-                                    ? h(
-                                        'button',
-                                        {
-                                          class: ['message-attachment', 'message-attachment-link'],
-                                          type: 'button',
-                                          title: attachment.mediaType || attachment.name,
-                                          onClick: () => void openMessageAttachment(attachment)
-                                        },
-                                        attachment.name
+                          // New interleaved layout when ordered content blocks are available;
+                          // falls back to the legacy process-block + content split otherwise.
+                          ...(message.contentBlocks?.length
+                            ? [
+                                ...(renderMessageContentBlocks(message) ?? []),
+                                renderCompactionAnchors(message),
+                                message.attachments?.length
+                                  ? h(
+                                      'div',
+                                      { class: 'message-attachments' },
+                                      message.attachments.map((attachment) =>
+                                        attachment.fileEntryId
+                                          ? h(
+                                              'button',
+                                              {
+                                                class: ['message-attachment', 'message-attachment-link'],
+                                                type: 'button',
+                                                title: attachment.mediaType || attachment.name,
+                                                onClick: () => void openMessageAttachment(attachment)
+                                              },
+                                              attachment.name
+                                            )
+                                          : h(
+                                              'span',
+                                              {
+                                                class: 'message-attachment',
+                                                title: attachment.mediaType || attachment.name
+                                              },
+                                              attachment.name
+                                            )
                                       )
-                                    : h(
-                                        'span',
-                                        {
-                                          class: 'message-attachment',
-                                          title: attachment.mediaType || attachment.name
-                                        },
-                                        attachment.name
+                                    )
+                                  : undefined
+                              ]
+                            : [
+                                renderProcessDetails(message),
+                                renderCompactionAnchors(message),
+                                message.attachments?.length
+                                  ? h(
+                                      'div',
+                                      { class: 'message-attachments' },
+                                      message.attachments.map((attachment) =>
+                                        attachment.fileEntryId
+                                          ? h(
+                                              'button',
+                                              {
+                                                class: ['message-attachment', 'message-attachment-link'],
+                                                type: 'button',
+                                                title: attachment.mediaType || attachment.name,
+                                                onClick: () => void openMessageAttachment(attachment)
+                                              },
+                                              attachment.name
+                                            )
+                                          : h(
+                                              'span',
+                                              {
+                                                class: 'message-attachment',
+                                                title: attachment.mediaType || attachment.name
+                                              },
+                                              attachment.name
+                                            )
                                       )
-                                )
-                              )
-                            : undefined,
-                          message.content
-                            ? h('div', {
-                                class: 'markdown-content',
-                                'data-message-id': message.id,
-                                onClick: handleMarkdownContentClick,
-                                innerHTML: renderSpeechMarkdown(message.content, message.id, {
-                                  copyCodeLabel: text('copyCode'),
-                                  downloadCodeLabel: text('downloadSource'),
-                                  wrapLinesLabel: text('wrapLines')
-                                })
-                              })
-                            : message.toolCalls?.length
-                              ? undefined
-                              : h('span', { class: 'streaming-placeholder', 'aria-label': text('generating') }),
+                                    )
+                                  : undefined,
+                                message.content
+                                  ? h('div', {
+                                      class: 'markdown-content',
+                                      'data-message-id': message.id,
+                                      ...(speechState.value.messageId === message.id && speechState.value.isSpeaking
+                                        ? { 'data-reading': '' }
+                                        : {}),
+                                      onClick: handleMarkdownContentClick,
+                                      innerHTML: renderSpeechMarkdown(message.content, message.id, {
+                                        copyCodeLabel: text('copyCode'),
+                                        downloadCodeLabel: text('downloadSource'),
+                                        wrapLinesLabel: text('wrapLines')
+                                      })
+                                    })
+                                  : message.toolCalls?.length
+                                    ? undefined
+                                    : h('span', {
+                                        class: 'streaming-placeholder',
+                                        'aria-label': text('generating')
+                                      })
+                              ]),
                           h('footer', { class: 'message-footer' }, [
                             h('span', { class: 'message-footer-meta' }, [
                               h(

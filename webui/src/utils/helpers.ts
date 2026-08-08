@@ -3,6 +3,7 @@ import type {
   WebUiAgentSessionMessageEntity,
   WebUiAgentStatusEvent,
   WebUiCompactionAnchor,
+  WebUiContentBlock,
   WebUiConversationSummary,
   WebUiCreateSessionWorkspace,
   WebUiMessagePart,
@@ -360,6 +361,46 @@ export const toProcessGroups = (
   return groups
 }
 
+/**
+ * Build the interleaved content blocks of a turn in original part order,
+ * mirroring the desktop live layout: reasoning, prose and tool calls render
+ * inline as they streamed; only the final prose tail is the answer.
+ */
+export const toContentBlocks = (parts: readonly WebUiMessagePart[]): readonly WebUiContentBlock[] => {
+  const blocks: WebUiContentBlock[] = []
+
+  for (const part of parts) {
+    if (HIDDEN_PROCESS_PART_TYPES.has(part.type)) continue
+
+    if (part.type === 'reasoning' && typeof part.text === 'string' && part.text.trim()) {
+      blocks.push({
+        kind: 'reasoning',
+        id: part.id ?? `reasoning:${blocks.length}`,
+        content: part.text,
+        isStreaming: part.state === 'streaming'
+      })
+      continue
+    }
+
+    if (part.type === 'text' && typeof part.text === 'string' && part.text.trim()) {
+      blocks.push({
+        kind: 'text',
+        id: part.id ?? `text:${blocks.length}`,
+        content: part.text,
+        isStreaming: part.state === 'streaming'
+      })
+      continue
+    }
+
+    if (isToolMessagePart(part) && part.toolCallId) {
+      const tool = toToolSnapshot(part)
+      if (tool) blocks.push({ kind: 'tool', id: part.toolCallId, tool })
+    }
+  }
+
+  return blocks
+}
+
 export const toAgentStatusEvents = (parts: readonly WebUiMessagePart[]): readonly WebUiAgentStatusEvent[] => {
   const events: WebUiAgentStatusEvent[] = []
 
@@ -493,6 +534,63 @@ export const settleProcessGroups = (groups: readonly WebUiProcessGroup[]): reado
     items: group.items.map((item) => (item.kind === 'reasoning' ? { ...item, isStreaming: false } : item))
   }))
 
+const cloneBlocks = (blocks: readonly WebUiContentBlock[]): WebUiContentBlock[] => [...blocks]
+
+/** Append a reasoning delta to the trailing reasoning block, or open a new one. */
+export const appendContentReasoning = (
+  blocks: readonly WebUiContentBlock[],
+  messageId: string,
+  delta: string
+): readonly WebUiContentBlock[] => {
+  if (!delta) return blocks
+  const next = cloneBlocks(blocks)
+  const last = next.at(-1)
+  if (last?.kind === 'reasoning') {
+    next[next.length - 1] = { ...last, content: `${last.content}${delta}`, isStreaming: true }
+    return next
+  }
+  next.push({
+    kind: 'reasoning',
+    id: `${messageId}:stream-reasoning:${next.length}`,
+    content: delta,
+    isStreaming: true
+  })
+  return next
+}
+
+/** Append a text delta to the trailing text block, or open a new one. */
+export const appendContentText = (
+  blocks: readonly WebUiContentBlock[],
+  messageId: string,
+  delta: string
+): readonly WebUiContentBlock[] => {
+  if (!delta) return blocks
+  const next = cloneBlocks(blocks)
+  const last = next.at(-1)
+  if (last?.kind === 'text') {
+    next[next.length - 1] = { ...last, content: `${last.content}${delta}`, isStreaming: true }
+    return next
+  }
+  next.push({ kind: 'text', id: `${messageId}:stream-text:${next.length}`, content: delta, isStreaming: true })
+  return next
+}
+
+/** Insert or refresh a tool block, replacing the existing one in place. */
+export const upsertContentTool = (
+  blocks: readonly WebUiContentBlock[],
+  messageId: string,
+  tool: WebUiToolCallSnapshot
+): readonly WebUiContentBlock[] => {
+  const next = cloneBlocks(blocks)
+  const index = next.findIndex((block) => block.kind === 'tool' && block.id === tool.id)
+  if (index >= 0) {
+    next[index] = { kind: 'tool', id: tool.id, tool }
+    return next
+  }
+  next.push({ kind: 'tool', id: tool.id, tool })
+  return next
+}
+
 export const toMessageSnapshot = (message: WebUiAgentSessionMessageEntity): WebUiMessageSnapshot => {
   const parts = message.data.parts ?? []
   const content = parts
@@ -505,6 +603,7 @@ export const toMessageSnapshot = (message: WebUiAgentSessionMessageEntity): WebU
     .join('')
   const toolCalls = toToolCalls(parts)
   const processGroups = toProcessGroups(parts, message.id)
+  const contentBlocks = toContentBlocks(parts)
   const agentStatusEvents = toAgentStatusEvents(parts)
   const compactionAnchors = toCompactionAnchors(parts)
   const attachments = parts
@@ -532,6 +631,7 @@ export const toMessageSnapshot = (message: WebUiAgentSessionMessageEntity): WebU
     ...(reasoning ? { reasoning } : {}),
     ...(toolCalls.length ? { toolCalls } : {}),
     ...(processGroups.length ? { processGroups } : {}),
+    ...(contentBlocks.length ? { contentBlocks } : {}),
     ...(compactionAnchors.length ? { compactionAnchors } : {}),
     ...(agentStatusEvents.length ? { agentStatusEvents } : {}),
     ...(attachments.length ? { attachments } : {}),
