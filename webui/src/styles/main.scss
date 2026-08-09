@@ -2108,10 +2108,13 @@
     border-radius: 8px;
   }
 
-  /* Assistant uses the full ~800px reading column (stretch fills the row up to the cap)
-     instead of shrinking to the content width; user stays slightly narrower and right-aligned. */
+  /* Assistant fills the ~800px reading column: `stretch` makes the bubble take the
+     whole row up to the cap, so short and long turns share one left AND right edge.
+     Do NOT switch this to `flex-start` — that shrinks the bubble to its content width
+     and the 800px cap stops having any visible effect (regressed once in a4f3e3c9e3).
+     User bubbles stay narrower and right-aligned. */
   .assistant-message {
-    align-self: flex-start;
+    align-self: stretch;
     max-width: min(800px, 100%);
   }
 
@@ -2805,6 +2808,64 @@
 
   .process-segment:last-child {
     margin-bottom: 0;
+  }
+
+  /* Live status row for a streaming turn — mirrors the desktop ActiveProcessHeader. */
+  .live-process-header {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+    min-width: 0;
+    margin-bottom: 8px;
+    color: #6b7280;
+    font-size: 13px;
+    line-height: 1.45;
+  }
+
+  .live-process-task {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .live-process-elapsed {
+    flex: 0 0 auto;
+    color: #9ca3af;
+    white-space: nowrap;
+  }
+
+  .live-process-elapsed::before {
+    margin-right: 6px;
+    content: '·';
+  }
+
+  .live-process-dots {
+    display: inline-flex;
+    flex: 0 0 auto;
+    gap: 3px;
+    align-items: center;
+  }
+
+  .live-process-dots i {
+    width: 4px;
+    height: 4px;
+    background: #9ca3af;
+    border-radius: 999px;
+    animation: live-process-dot 1.2s ease-in-out infinite;
+  }
+
+  .live-process-dots i:nth-child(2) {
+    animation-delay: 0.15s;
+  }
+
+  .live-process-dots i:nth-child(3) {
+    animation-delay: 0.3s;
+  }
+
+  @keyframes live-process-dot {
+    0%,
+    100% { opacity: 0.3; }
+    50% { opacity: 1; }
   }
 
   .process-item-indicator {
@@ -5347,6 +5408,18 @@
 
   :root[data-webui-theme='dark'] .process-narration {
     color: #9ca3af;
+  }
+
+  :root[data-webui-theme='dark'] .live-process-header {
+    color: #94a3b8;
+  }
+
+  :root[data-webui-theme='dark'] .live-process-elapsed {
+    color: #64748b;
+  }
+
+  :root[data-webui-theme='dark'] .live-process-dots i {
+    background: #64748b;
   }
 
   :root[data-webui-theme='dark'] .tool-call-group-summary {

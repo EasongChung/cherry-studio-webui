@@ -1487,6 +1487,36 @@ const App = defineComponent({
     }
 
     /**
+     * Live status row for a streaming turn, mirroring the desktop `ActiveProcessHeader`:
+     * the tool currently running (or awaiting approval) plus a ticking elapsed time, so
+     * the user can see the run is still moving. Active turns get no collapse shell.
+     */
+    const renderActiveProcessHeader = (message: WebUiMessageSnapshot) => {
+      processElapsedTick.value
+      const tools = message.toolCalls ?? []
+      const active =
+        tools.filter((tool) => tool.state === 'approval-requested').at(-1) ??
+        tools.filter((tool) => !terminalToolStates.has(tool.state)).at(-1)
+      // Annotated: `text()` returns a union of every pack literal, and interpolating it
+      // into a template without a `string` target blows past the union complexity limit.
+      let label: string = text('processDetails')
+      if (active) {
+        const presentation = getToolPresentation(active.name)
+        const task = getToolTaskDescription(active.name, active.input)
+        label = task ? `${text(presentation.labelKey)} · ${task}` : text(presentation.labelKey)
+      }
+      const startedAt = Date.parse(message.createdAt)
+      const elapsed = Number.isFinite(startedAt) ? formatDuration(Math.max(0, Date.now() - startedAt)) : undefined
+
+      return h('div', { class: 'live-process-header', key: `${message.id}:live-header` }, [
+        h('span', { class: 'process-state-indicator', 'aria-hidden': 'true' }),
+        h('span', { class: 'live-process-task' }, label),
+        h('span', { class: 'live-process-dots', 'aria-hidden': 'true' }, [h('i'), h('i'), h('i')]),
+        elapsed ? h('span', { class: 'live-process-elapsed' }, elapsed) : undefined
+      ])
+    }
+
+    /**
      * Render an assistant turn's body from its ordered content blocks, mirroring the
      * desktop agent pane: reasoning, prose and tool cards stay in streaming order and
      * interleave, with only the trailing prose acting as the final answer.
@@ -1506,11 +1536,12 @@ const App = defineComponent({
       const historyBlocks = lastTextIndex >= 0 ? blocks.slice(0, lastTextIndex) : blocks
       const lastBlock = lastTextIndex >= 0 ? blocks[lastTextIndex] : undefined
       const finalText = lastBlock?.kind === 'text' ? lastBlock : undefined
+      const isThinking = message.status === 'pending'
 
-      const nodes: VNode[] = []
+      const historyNodes: VNode[] = []
       for (const item of groupContentBlocks(historyBlocks)) {
         if (item.kind === 'prose') {
-          nodes.push(
+          historyNodes.push(
             h('div', {
               class: 'markdown-content process-narration',
               key: item.key,
@@ -1524,7 +1555,53 @@ const App = defineComponent({
           )
           continue
         }
-        nodes.push(h('div', { class: 'process-segment', key: item.key }, renderProcessSegment(item.blocks, message)))
+        historyNodes.push(
+          h('div', { class: 'process-segment', key: item.key }, renderProcessSegment(item.blocks, message))
+        )
+      }
+
+      const nodes: VNode[] = []
+      if (historyNodes.length) {
+        if (isThinking) {
+          // Active phase: no collapse shell, just a live status row above the running history.
+          nodes.push(renderActiveProcessHeader(message))
+          nodes.push(...historyNodes)
+        } else {
+          // Terminal phase: the desktop folds the whole history — narration included —
+          // behind one "已处理 N 个工具 · 用时 X" row, leaving only the final answer outside.
+          const openOverride = processOpenOverrides.value.get(message.id)
+          const isProcessOpen = openOverride ?? false
+          nodes.push(
+            h(
+              'details',
+              {
+                class: 'process-block',
+                key: `${message.id}:process-history`,
+                ...(isProcessOpen ? { open: true } : {})
+              },
+              [
+                h(
+                  'summary',
+                  {
+                    onClick: (event: MouseEvent) => {
+                      const details = (event.currentTarget as HTMLElement).closest('details')
+                      const next = new Map(processOpenOverrides.value)
+                      next.set(message.id, !(details?.open ?? false))
+                      processOpenOverrides.value = next
+                    }
+                  },
+                  [
+                    h('span', { class: 'process-state-indicator', 'aria-hidden': 'true' }),
+                    h('span', { class: 'process-summary' }, getProcessSummary(message))
+                  ]
+                ),
+                h('div', { class: 'process-history' }, historyNodes)
+              ]
+            )
+          )
+        }
+      } else if (isThinking && !finalText) {
+        nodes.push(renderActiveProcessHeader(message))
       }
 
       if (finalText) {
