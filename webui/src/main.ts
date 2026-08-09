@@ -1395,52 +1395,107 @@ const App = defineComponent({
         onDeny: () => void respondToolApproval(tool, message, false)
       })
 
-    /** A single inline content block, rendered in its original stream order. */
-    const renderContentBlock = (block: WebUiContentBlock, message: WebUiMessageSnapshot) => {
-      if (block.kind === 'reasoning') {
-        // Render intermediate reasoning as inline process narration (matching the desktop),
-        // not as a collapsible "已深度思考" thinking block.
-        return h(
-          'div',
-          { class: 'process-narration markdown-content', key: block.id, onClick: handleMarkdownContentClick },
-          {
-            innerHTML: renderMarkdown(block.content, {
-              copyCodeLabel: text('copyCode'),
-              downloadCodeLabel: text('downloadSource'),
-              wrapLinesLabel: text('wrapLines')
-            })
-          }
-        )
-      }
-      if (block.kind === 'tool') {
-        return renderToolCard(block.tool, message)
-      }
-      // Non-final prose rendered inline as process narration (lightweight).
+    /**
+     * Merge a run of consecutive tool calls the way the desktop ToolBlockGroup does:
+     * a lone tool stays a bare card, several collapse behind one summary row.
+     */
+    const renderToolRun = (tools: readonly WebUiToolCallSnapshot[], message: WebUiMessageSnapshot) => {
+      if (tools.length === 1) return renderToolCard(tools[0]!, message)
+      const anyActive = tools.some((tool) => message.status === 'pending' && !terminalToolStates.has(tool.state))
+      const latest = tools[tools.length - 1]!
+      const presentation = getToolPresentation(latest.name)
+      const latestTask = getToolTaskDescription(latest.name, latest.input)
       return h(
-        'div',
-        { class: 'process-narration markdown-content', key: block.id, onClick: handleMarkdownContentClick },
+        'details',
         {
-          innerHTML: renderMarkdown(block.content, {
-            copyCodeLabel: text('copyCode'),
-            downloadCodeLabel: text('downloadSource'),
-            wrapLinesLabel: text('wrapLines')
-          })
-        }
+          class: ['tool-call-group', { 'tool-call-group-pending': anyActive }],
+          key: `group:${tools.map((tool) => tool.id).join('|')}`,
+          ...(anyActive ? { open: true } : {})
+        },
+        [
+          h('summary', [
+            h('span', { class: 'tool-call-group-indicator', 'aria-hidden': 'true' }),
+            h('span', { class: 'tool-call-icon', 'aria-hidden': 'true' }, presentation.icon),
+            h(
+              'span',
+              { class: 'tool-call-group-summary' },
+              latestTask
+                ? `${text(presentation.labelKey)} · ${latestTask}`
+                : `${text(presentation.labelKey)} · ${tools.length}`
+            )
+          ]),
+          h(
+            'div',
+            { class: 'tool-call-group-body' },
+            tools.map((tool) => renderToolCard(tool, message))
+          )
+        ]
       )
     }
 
     /**
+     * Split blocks into alternating process / prose segments, mirroring the desktop
+     * `groupNestedHistoryEntries`: reasoning and tool calls collect into one process
+     * run, and any prose between them breaks the run and renders on its own.
+     */
+    const groupContentBlocks = (blocks: readonly WebUiContentBlock[]) => {
+      const items: Array<
+        | { kind: 'process'; key: string; blocks: readonly WebUiContentBlock[] }
+        | { kind: 'prose'; key: string; block: Extract<WebUiContentBlock, { kind: 'text' }> }
+      > = []
+      let processRun: WebUiContentBlock[] = []
+      const flushProcess = () => {
+        if (!processRun.length) return
+        items.push({ kind: 'process', key: `process:${processRun[0]!.id}`, blocks: processRun })
+        processRun = []
+      }
+
+      for (const block of blocks) {
+        if (block.kind === 'text') {
+          flushProcess()
+          items.push({ kind: 'prose', key: block.id, block })
+          continue
+        }
+        processRun.push(block)
+      }
+      flushProcess()
+      return items
+    }
+
+    /** Render one process run: reasoning stays a thinking block, consecutive tools merge into a group. */
+    const renderProcessSegment = (blocks: readonly WebUiContentBlock[], message: WebUiMessageSnapshot) => {
+      const nodes: VNode[] = []
+      let toolRun: WebUiToolCallSnapshot[] = []
+      const flushToolRun = () => {
+        if (!toolRun.length) return
+        nodes.push(renderToolRun(toolRun, message))
+        toolRun = []
+      }
+
+      for (const block of blocks) {
+        if (block.kind === 'tool') {
+          toolRun.push(block.tool)
+          continue
+        }
+        flushToolRun()
+        if (block.kind === 'reasoning') {
+          nodes.push(renderReasoningBlock(block.id, block.content, block.isStreaming))
+        }
+      }
+      flushToolRun()
+      return nodes
+    }
+
+    /**
      * Render an assistant turn's body from its ordered content blocks, mirroring the
-     * desktop layout: while the turn is live, reasoning, prose and tool cards render
-     * IN LINE in streaming order; once completed, all non-final blocks collapse into a
-     * single-row process container and only the final prose tail stays outside it.
+     * desktop agent pane: reasoning, prose and tool cards stay in streaming order and
+     * interleave, with only the trailing prose acting as the final answer.
      */
     const renderMessageContentBlocks = (message: WebUiMessageSnapshot) => {
       const blocks = message.contentBlocks
       if (!blocks?.length) return undefined
 
-      const isThinking = message.status === 'pending'
-      // The last text block is the final answer; everything before it is process history.
+      // The trailing text block is the answer; everything before it is process history.
       let lastTextIndex = -1
       for (let index = blocks.length - 1; index >= 0; index--) {
         if (blocks[index]?.kind === 'text') {
@@ -1448,70 +1503,30 @@ const App = defineComponent({
           break
         }
       }
-      const processBlocks = lastTextIndex >= 0 ? blocks.slice(0, lastTextIndex) : blocks
+      const historyBlocks = lastTextIndex >= 0 ? blocks.slice(0, lastTextIndex) : blocks
       const lastBlock = lastTextIndex >= 0 ? blocks[lastTextIndex] : undefined
       const finalText = lastBlock?.kind === 'text' ? lastBlock : undefined
 
-      // Live turn: render process blocks inline in order, then the streaming answer tail.
-      if (isThinking) {
-        const nodes = [...processBlocks.map((block) => renderContentBlock(block, message))]
-        if (finalText) {
+      const nodes: VNode[] = []
+      for (const item of groupContentBlocks(historyBlocks)) {
+        if (item.kind === 'prose') {
           nodes.push(
             h('div', {
-              class: 'markdown-content',
-              'data-message-id': message.id,
-              ...(speechState.value.messageId === message.id && speechState.value.isSpeaking
-                ? { 'data-reading': '' }
-                : {}),
+              class: 'markdown-content process-narration',
+              key: item.key,
               onClick: handleMarkdownContentClick,
-              innerHTML: renderSpeechMarkdown(finalText.content, message.id, {
+              innerHTML: renderMarkdown(item.block.content, {
                 copyCodeLabel: text('copyCode'),
                 downloadCodeLabel: text('downloadSource'),
                 wrapLinesLabel: text('wrapLines')
               })
             })
           )
+          continue
         }
-        return nodes
+        nodes.push(h('div', { class: 'process-segment', key: item.key }, renderProcessSegment(item.blocks, message)))
       }
 
-      // Completed turn: fold process blocks into a single-row container; answer stays out.
-      const openOverride = processOpenOverrides.value.get(message.id)
-      const isProcessOpen = openOverride !== undefined ? openOverride : false
-      const nodes: VNode[] = []
-      if (processBlocks.length) {
-        nodes.push(
-          h(
-            'details',
-            {
-              class: 'process-block',
-              ...(isProcessOpen ? { open: true } : {})
-            },
-            [
-              h(
-                'summary',
-                {
-                  onClick: (event: MouseEvent) => {
-                    const details = (event.currentTarget as HTMLElement).closest('details')
-                    const next = new Map(processOpenOverrides.value)
-                    next.set(message.id, !(details?.open ?? false))
-                    processOpenOverrides.value = next
-                  }
-                },
-                [
-                  h('span', { class: 'process-state-indicator', 'aria-hidden': 'true' }),
-                  h('span', { class: 'process-summary' }, getProcessSummary(message))
-                ]
-              ),
-              h(
-                'div',
-                { class: 'process-history' },
-                processBlocks.map((block) => renderContentBlock(block, message))
-              )
-            ]
-          )
-        )
-      }
       if (finalText) {
         nodes.push(
           h('div', {
@@ -4000,7 +4015,9 @@ const App = defineComponent({
 
     const abortMessage = async () => {
       const conversationId = selectedConversationId.value
-      if (!conversationId || activeRunConversationId.value !== conversationId) return
+      // The run id can already be cleared while the turn is still pending (late `done`
+      // ordering); keep aborting whenever the composer shows the stop affordance.
+      if (!conversationId || !isCurrentlyStreaming.value) return
 
       try {
         await httpClient.postJson(`/api/agent-sessions/${encodeURIComponent(conversationId)}/abort`, {})
@@ -6232,9 +6249,7 @@ const App = defineComponent({
                             }
                           },
                           renderActionIcon(
-                            activeRunConversationId.value === selectedConversationId.value &&
-                              !composerText.value.trim() &&
-                              attachments.value.length === 0
+                            isCurrentlyStreaming.value && !composerText.value.trim() && attachments.value.length === 0
                               ? 'stop'
                               : 'send'
                           )

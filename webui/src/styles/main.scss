@@ -2794,6 +2794,19 @@
     min-width: 0;
   }
 
+  /* One run of consecutive reasoning/tool blocks between two prose segments. */
+  .process-segment {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    min-width: 0;
+    margin-bottom: 8px;
+  }
+
+  .process-segment:last-child {
+    margin-bottom: 0;
+  }
+
   .process-item-indicator {
     width: 7px;
     height: 7px;
