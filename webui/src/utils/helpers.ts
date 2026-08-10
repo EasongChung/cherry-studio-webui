@@ -620,6 +620,15 @@ export const toMessageSnapshot = (message: WebUiAgentSessionMessageEntity): WebU
     message.stats?.timeCompletionMs ??
     message.stats?.timeThinkingMs ??
     parts.find((part) => part.type === 'reasoning')?.providerMetadata?.cherry?.thinkingMs
+  // Whole-turn wall clock. The desktop rewrites `updatedAt` on every part append, so
+  // the last write lands when the turn finishes — unlike `timeCompletionMs`, this
+  // covers the tool executions and approval waits between stream rounds.
+  const startedMs = Date.parse(message.createdAt)
+  const finishedMs = Date.parse(message.updatedAt)
+  const totalElapsedMs =
+    Number.isFinite(startedMs) && Number.isFinite(finishedMs) && finishedMs > startedMs
+      ? finishedMs - startedMs
+      : undefined
   const modelId = typeof message.modelId === 'string' && message.modelId.trim() ? message.modelId : undefined
   const tokenStats = toMessageTokenStats(message.stats)
 
@@ -638,6 +647,7 @@ export const toMessageSnapshot = (message: WebUiAgentSessionMessageEntity): WebU
     ...(modelId ? { modelId } : {}),
     status: message.status,
     ...(processingTimeMs ? { processingTimeMs } : {}),
+    ...(totalElapsedMs ? { totalElapsedMs } : {}),
     ...(tokenStats ? { tokenStats } : {}),
     createdAt: message.createdAt
   }

@@ -161,6 +161,13 @@ export type WebUiMessageSnapshot = {
   readonly modelId?: string
   readonly status: 'pending' | 'success' | 'error' | 'paused'
   readonly processingTimeMs?: number
+  /**
+   * Wall-clock duration of the whole turn (row `updatedAt - createdAt`), covering
+   * every stream round plus the tool execution and approval waits between them.
+   * `processingTimeMs` only measures a single LLM stream, so it under-reports the
+   * time the user actually waited on multi-round turns.
+   */
+  readonly totalElapsedMs?: number
   /** Real token usage reported by the desktop — absent when the row has no stats. */
   readonly tokenStats?: WebUiMessageTokenStats
   readonly createdAt: string

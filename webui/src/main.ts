@@ -96,7 +96,6 @@ import {
   buildConversationGroups,
   conversationGroupKey,
   type ConversationWorkdirGroup,
-  formatDuration,
   isAbortError,
   loadCollapsedWorkdirGroups,
   persistCollapsedWorkdirGroups,
@@ -1005,13 +1004,16 @@ const App = defineComponent({
         const action = toolCount
           ? text('toolCallsProcessed').replace('{{count}}', String(toolCount))
           : text('reasoning')
-        const duration = message.processingTimeMs ? formatDuration(message.processingTimeMs) : undefined
+        // Prefer the whole-turn wall clock; `processingTimeMs` only covers one stream
+        // round and under-reports turns that ran tools between rounds.
+        const totalMs = message.totalElapsedMs ?? message.processingTimeMs
+        const duration = totalMs ? formatLiveElapsed(totalMs) : undefined
         return duration ? `${action} · ${duration}` : action
       }
       // Match desktop live progress: keep one stable process label and append elapsed time while streaming.
       if (message.status === 'pending') {
         const startedAt = Date.parse(message.createdAt)
-        const elapsed = Number.isFinite(startedAt) ? formatDuration(Math.max(0, Date.now() - startedAt)) : undefined
+        const elapsed = Number.isFinite(startedAt) ? formatLiveElapsed(Math.max(0, Date.now() - startedAt)) : undefined
         return elapsed ? `${text('processDetails')} · ${elapsed}` : text('processDetails')
       }
       return text('reasoning')
@@ -2934,13 +2936,16 @@ const App = defineComponent({
 
       modelUpdateState.value = 'updating'
       submitError.value = ''
+      // Dismiss on selection, not on success — a failed request reports through
+      // `submitError` and should not leave the menu hanging open.
+      modelPickerOpen.value = false
+      compactHeaderPickerOpen.value = false
       try {
         await httpClient.patchJson(`/api/agent-sessions/${encodeURIComponent(conversationId)}/model`, {
           model: model.id
         })
         await loadAgents()
         refreshComposerInfo(conversationId)
-        modelPickerOpen.value = false
         modelUpdateState.value = 'idle'
       } catch (error) {
         submitError.value = localizedErrorMessage(error)
@@ -2954,12 +2959,13 @@ const App = defineComponent({
         return
       agentUpdateState.value = 'updating'
       submitError.value = ''
+      agentPickerOpen.value = false
+      compactHeaderPickerOpen.value = false
       try {
         await httpClient.patchJson(`/api/data/agent-sessions/${encodeURIComponent(conversationId)}`, { agentId })
         await loadAgents()
         // SSE session-updated 会触发 refreshFromDesktopSync → loadConversations
         refreshSkills(agentId)
-        agentPickerOpen.value = false
         agentUpdateState.value = 'idle'
       } catch (error) {
         submitError.value = localizedErrorMessage(error)
@@ -3000,10 +3006,11 @@ const App = defineComponent({
       if (!conversationId || workspaceUpdateState.value === 'updating') return
       workspaceUpdateState.value = 'updating'
       submitError.value = ''
+      workspacePickerOpen.value = false
+      compactHeaderPickerOpen.value = false
       try {
         const body = workspaceId ? { type: 'user' as const, workspaceId } : { type: 'system' as const }
         await httpClient.putJson(`/api/data/agent-sessions/${encodeURIComponent(conversationId)}/workspace`, body)
-        workspacePickerOpen.value = false
         workspaceUpdateState.value = 'idle'
         await loadConversations()
       } catch (error) {
@@ -3025,13 +3032,14 @@ const App = defineComponent({
 
       permissionModeUpdateState.value = 'updating'
       submitError.value = ''
+      permissionModePickerOpen.value = false
+      compactHeaderPickerOpen.value = false
       try {
         await httpClient.patchJson<WebUiPermissionModeResponse>(
           `/api/agent-sessions/${encodeURIComponent(conversationId)}/permission-mode`,
           { permissionMode: mode }
         )
         await loadAgents()
-        permissionModePickerOpen.value = false
         permissionModeUpdateState.value = 'idle'
       } catch (error) {
         submitError.value = localizedErrorMessage(error)
@@ -4564,6 +4572,24 @@ const App = defineComponent({
     }
 
     /**
+     * Dismiss every toggle-driven popover when a pointer lands outside all of them.
+     * Surfaces and their triggers opt in via `webui-popover-surface` /
+     * `webui-popover-trigger`; a trigger is excluded so its own toggle handler stays
+     * authoritative instead of being closed here and immediately reopened.
+     *
+     * The slash-command menu is deliberately not closed: it is derived from the
+     * composer text rather than a toggle, so dismissing it on an outside click
+     * would fight the user still typing the command.
+     */
+    const handlePopoverOutsidePointerDown = (event: PointerEvent) => {
+      const target = event.target
+      if (!(target instanceof Element)) return
+      if (target.closest('.webui-popover-surface, .webui-popover-trigger')) return
+      closeOtherComposerPopovers()
+      compactHeaderPickerOpen.value = false
+    }
+
+    /**
      * Full launcher catalog, in desktop section order:
      * primary tools → slash commands → resources (skills / knowledge bases).
      *
@@ -4911,6 +4937,7 @@ const App = defineComponent({
 
     onMounted(() => {
       applyThemeMode()
+      document.addEventListener('pointerdown', handlePopoverOutsidePointerDown)
       processElapsedTimer = window.setInterval(() => {
         if (isCurrentlyStreaming.value) processElapsedTick.value += 1
       }, 1000)
@@ -4967,6 +4994,7 @@ const App = defineComponent({
     onBeforeUnmount(() => {
       clearStatusPreviewTimers()
       saveComposerDraft()
+      document.removeEventListener('pointerdown', handlePopoverOutsidePointerDown)
       if (bottomWheelSettleTimer !== undefined) window.clearTimeout(bottomWheelSettleTimer)
       if (workspaceFileSearchTimer !== undefined) window.clearTimeout(workspaceFileSearchTimer)
       releaseWorkspacePreview()
@@ -5104,7 +5132,7 @@ const App = defineComponent({
           h(
             'button',
             {
-              class: 'chat-header-selector-button',
+              class: 'chat-header-selector-button webui-popover-trigger',
               type: 'button',
               title: `${text('switchAgent')}: ${selectedAgentName.value ?? text('selectAgent')}`,
               'aria-label': text('switchAgent'),
@@ -5122,7 +5150,11 @@ const App = defineComponent({
             ]
           ),
           agentPickerOpen.value
-            ? h('div', { class: 'chat-header-picker-menu', role: 'listbox' }, renderAgentPickerOptions())
+            ? h(
+                'div',
+                { class: 'chat-header-picker-menu webui-popover-surface', role: 'listbox' },
+                renderAgentPickerOptions()
+              )
             : undefined
         ]),
         // Model selector
@@ -5130,7 +5162,7 @@ const App = defineComponent({
           h(
             'button',
             {
-              class: 'chat-header-selector-button',
+              class: 'chat-header-selector-button webui-popover-trigger',
               type: 'button',
               title: `${selectedAgentName.value ?? ''}: ${modelPickerLabel.value}`,
               'aria-label': text('model'),
@@ -5152,7 +5184,11 @@ const App = defineComponent({
             ]
           ),
           modelPickerOpen.value
-            ? h('div', { class: 'chat-header-picker-menu', role: 'listbox' }, renderModelPickerOptions())
+            ? h(
+                'div',
+                { class: 'chat-header-picker-menu webui-popover-surface', role: 'listbox' },
+                renderModelPickerOptions()
+              )
             : undefined
         ]),
         // Workspace selector
@@ -5160,7 +5196,7 @@ const App = defineComponent({
           h(
             'button',
             {
-              class: 'chat-header-selector-button',
+              class: 'chat-header-selector-button webui-popover-trigger',
               type: 'button',
               title: text('workspace'),
               'aria-label': text('workspace'),
@@ -5185,7 +5221,11 @@ const App = defineComponent({
             ]
           ),
           workspacePickerOpen.value
-            ? h('div', { class: 'chat-header-picker-menu', role: 'listbox' }, renderWorkspacePickerOptions())
+            ? h(
+                'div',
+                { class: 'chat-header-picker-menu webui-popover-surface', role: 'listbox' },
+                renderWorkspacePickerOptions()
+              )
             : undefined
         ])
       ])
@@ -5195,7 +5235,7 @@ const App = defineComponent({
         h(
           'button',
           {
-            class: 'chat-header-selector-button mobile-header-selector-button',
+            class: 'chat-header-selector-button mobile-header-selector-button webui-popover-trigger',
             type: 'button',
             title: modelUpdateState.value === 'updating' ? text('generating') : modelPickerLabel.value,
             'aria-label': text('switchAgent'),
@@ -5217,20 +5257,24 @@ const App = defineComponent({
           ]
         ),
         compactHeaderPickerOpen.value
-          ? h('div', { class: 'chat-header-picker-menu mobile-header-picker-menu', role: 'menu' }, [
-              h('section', { class: 'mobile-header-picker-group' }, [
-                h('p', { class: 'mobile-header-picker-group-title' }, text('switchAgent')),
-                renderAgentPickerOptions()
-              ]),
-              h('section', { class: 'mobile-header-picker-group' }, [
-                h('p', { class: 'mobile-header-picker-group-title' }, text('model')),
-                renderModelPickerOptions()
-              ]),
-              h('section', { class: 'mobile-header-picker-group' }, [
-                h('p', { class: 'mobile-header-picker-group-title' }, text('workspace')),
-                renderWorkspacePickerOptions()
-              ])
-            ])
+          ? h(
+              'div',
+              { class: 'chat-header-picker-menu mobile-header-picker-menu webui-popover-surface', role: 'menu' },
+              [
+                h('section', { class: 'mobile-header-picker-group' }, [
+                  h('p', { class: 'mobile-header-picker-group-title' }, text('switchAgent')),
+                  renderAgentPickerOptions()
+                ]),
+                h('section', { class: 'mobile-header-picker-group' }, [
+                  h('p', { class: 'mobile-header-picker-group-title' }, text('model')),
+                  renderModelPickerOptions()
+                ]),
+                h('section', { class: 'mobile-header-picker-group' }, [
+                  h('p', { class: 'mobile-header-picker-group-title' }, text('workspace')),
+                  renderWorkspacePickerOptions()
+                ])
+              ]
+            )
           : undefined
       ])
 
@@ -6146,6 +6190,7 @@ const App = defineComponent({
                             {
                               class: [
                                 'composer-tool-button',
+                                'webui-popover-trigger',
                                 { 'composer-tool-button-active': reasoningEffort.value !== 'default' }
                               ],
                               type: 'button',
@@ -6170,6 +6215,7 @@ const App = defineComponent({
                             {
                               class: [
                                 'composer-tool-button',
+                                'webui-popover-trigger',
                                 {
                                   'composer-tool-button-active': selectedPermissionMode.value !== 'default',
                                   'composer-tool-button-caution': selectedPermissionMode.value === 'bypassPermissions'
@@ -6197,6 +6243,7 @@ const App = defineComponent({
                                 {
                                   class: [
                                     'composer-tool-button',
+                                    'webui-popover-trigger',
                                     { 'composer-tool-button-active': skillPickerOpen.value }
                                   ],
                                   type: 'button',
@@ -6223,6 +6270,7 @@ const App = defineComponent({
                                 {
                                   class: [
                                     'composer-tool-button',
+                                    'webui-popover-trigger',
                                     { 'composer-tool-button-active': kbPickerOpen.value }
                                   ],
                                   type: 'button',
@@ -6370,7 +6418,7 @@ const App = defineComponent({
                       reasoningPickerOpen.value
                         ? h(
                             'div',
-                            { class: 'reasoning-picker-menu', role: 'listbox' },
+                            { class: 'reasoning-picker-menu webui-popover-surface', role: 'listbox' },
                             reasoningOptions.value.map((option) =>
                               h(
                                 'button',
@@ -6409,7 +6457,7 @@ const App = defineComponent({
                       permissionModePickerOpen.value
                         ? h(
                             'div',
-                            { class: 'permission-mode-picker-menu', role: 'listbox' },
+                            { class: 'permission-mode-picker-menu webui-popover-surface', role: 'listbox' },
                             permissionModeCards.value.map((card) =>
                               h(
                                 'button',
@@ -6493,7 +6541,7 @@ const App = defineComponent({
                       slashCommandSuggestions.value.length
                         ? h(
                             'div',
-                            { class: 'slash-command-menu', role: 'listbox' },
+                            { class: 'slash-command-menu webui-popover-surface', role: 'listbox' },
                             slashCommandSuggestions.value.map((command) =>
                               h(
                                 'button',
@@ -6517,7 +6565,7 @@ const App = defineComponent({
                           )
                         : undefined,
                       skillPickerOpen.value
-                        ? h('div', { class: 'skill-picker-menu', role: 'listbox' }, [
+                        ? h('div', { class: 'skill-picker-menu webui-popover-surface', role: 'listbox' }, [
                             h('input', {
                               class: 'skill-picker-search',
                               type: 'search',
@@ -6552,7 +6600,7 @@ const App = defineComponent({
                           ])
                         : undefined,
                       kbPickerOpen.value
-                        ? h('div', { class: 'kb-picker-menu' }, [
+                        ? h('div', { class: 'kb-picker-menu webui-popover-surface' }, [
                             h('div', { class: 'kb-picker-label' }, text('knowledgeSelectBase')),
                             h('div', { class: 'kb-picker-bases' }, [
                               knowledgeBases.value.length
