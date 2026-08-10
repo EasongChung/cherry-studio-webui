@@ -102,6 +102,7 @@ import {
   persistCollapsedWorkdirGroups,
   readFileAsDataUrl,
   resolveWorkspaceSeedFromConversation,
+  splitProcessElapsed,
   terminalToolStates,
   toConversationSummary,
   toDisplayText,
@@ -1487,32 +1488,61 @@ const App = defineComponent({
     }
 
     /**
-     * Live status row for a streaming turn, mirroring the desktop `ActiveProcessHeader`:
-     * the tool currently running (or awaiting approval) plus a ticking elapsed time, so
-     * the user can see the run is still moving. Active turns get no collapse shell.
+     * Formats the elapsed milliseconds into minutes:seconds using the i18n templates,
+     * mirroring the desktop `formatPlaceholderElapsed` tiered output.
      */
-    const renderActiveProcessHeader = (message: WebUiMessageSnapshot) => {
+    const formatLiveElapsed = (milliseconds: number): string => {
+      const { minutes, seconds } = splitProcessElapsed(milliseconds)
+      return minutes > 0
+        ? text('elapsedMinutes').replace('{{minutes}}', String(minutes)).replace('{{seconds}}', String(seconds))
+        : text('elapsedSeconds').replace('{{seconds}}', String(seconds))
+    }
+
+    /**
+     * Top row of a live turn: "处理中 · 1分23秒", mirroring the desktop
+     * `ActiveProcessHeader` with `preferSummary`. The summary label is always
+     * `text('processing')` followed by the real-time elapsed time.
+     * Only rendered while the message is still pending.
+     */
+    const renderProcessElapsedRow = (message: WebUiMessageSnapshot) => {
+      processElapsedTick.value
+      const startedAt = Date.parse(message.createdAt)
+      const elapsed = Number.isFinite(startedAt) ? formatLiveElapsed(Math.max(0, Date.now() - startedAt)) : undefined
+
+      return h('div', { class: 'live-process-elapsed-row', key: `${message.id}:live-elapsed` }, [
+        h('span', { class: 'process-state-indicator', 'aria-hidden': 'true' }),
+        h('span', { class: 'live-process-summary' }, text('processing')),
+        elapsed ? h('span', { class: 'live-process-elapsed' }, elapsed) : undefined
+      ])
+    }
+
+    /**
+     * Bottom status row of a live turn: "正在调用 读取文件 · src/main.ts" when a
+     * tool is active, or "正在思考…" when the model is reasoning.  Disappears once
+     * the message finishes or is interrupted, matching the desktop `PlaceholderBlock`
+     * / `ToolBlockGroup isLiveProgress` behaviour.
+     */
+    const renderLiveProcessStatus = (message: WebUiMessageSnapshot) => {
       processElapsedTick.value
       const tools = message.toolCalls ?? []
       const active =
         tools.filter((tool) => tool.state === 'approval-requested').at(-1) ??
         tools.filter((tool) => !terminalToolStates.has(tool.state)).at(-1)
-      // Annotated: `text()` returns a union of every pack literal, and interpolating it
-      // into a template without a `string` target blows past the union complexity limit.
-      let label: string = text('processDetails')
+      // Annotated: `text()` returns a union of every pack literal, and
+      // interpolating it into a template without a `string` target blows past
+      // the union complexity limit.
+      let label: string = text('thinkingLive')
       if (active) {
         const presentation = getToolPresentation(active.name)
         const task = getToolTaskDescription(active.name, active.input)
-        label = task ? `${text(presentation.labelKey)} · ${task}` : text(presentation.labelKey)
+        const toolLabel = task ? `${text(presentation.labelKey)} · ${task}` : text(presentation.labelKey)
+        label = `${text('invokingTool')} ${toolLabel}`
       }
-      const startedAt = Date.parse(message.createdAt)
-      const elapsed = Number.isFinite(startedAt) ? formatDuration(Math.max(0, Date.now() - startedAt)) : undefined
 
-      return h('div', { class: 'live-process-header', key: `${message.id}:live-header` }, [
+      return h('div', { class: 'live-process-header', key: `${message.id}:live-status` }, [
         h('span', { class: 'process-state-indicator', 'aria-hidden': 'true' }),
         h('span', { class: 'live-process-task' }, label),
-        h('span', { class: 'live-process-dots', 'aria-hidden': 'true' }, [h('i'), h('i'), h('i')]),
-        elapsed ? h('span', { class: 'live-process-elapsed' }, elapsed) : undefined
+        h('span', { class: 'live-process-dots', 'aria-hidden': 'true' }, [h('i'), h('i'), h('i')])
       ])
     }
 
@@ -1563,8 +1593,8 @@ const App = defineComponent({
       const nodes: VNode[] = []
       if (historyNodes.length) {
         if (isThinking) {
-          // Active phase: no collapse shell, just a live status row above the running history.
-          nodes.push(renderActiveProcessHeader(message))
+          // Active phase: top time row + flat history (no collapse shell).
+          nodes.push(renderProcessElapsedRow(message))
           nodes.push(...historyNodes)
         } else {
           // Terminal phase: the desktop folds the whole history — narration included —
@@ -1600,8 +1630,6 @@ const App = defineComponent({
             )
           )
         }
-      } else if (isThinking && !finalText) {
-        nodes.push(renderActiveProcessHeader(message))
       }
 
       if (finalText) {
@@ -1620,6 +1648,13 @@ const App = defineComponent({
             })
           })
         )
+      }
+
+      // Live status sits on the bottom line of the reply, so the current activity
+      // stays visible while the stream auto-scrolls. Interrupted or finished turns
+      // drop it entirely (the `isThinking` guard closes on non-pending status).
+      if (isThinking && (historyNodes.length || !finalText)) {
+        nodes.push(renderLiveProcessStatus(message))
       }
       return nodes
     }

@@ -684,3 +684,10 @@ export const formatDuration = (milliseconds: number) => {
   const seconds = Math.max(0.1, milliseconds / 1000)
   return seconds < 10 ? `${seconds.toFixed(1)}s` : `${Math.round(seconds)}s`
 }
+
+/** Split an elapsed duration into whole minutes and seconds, mirroring the desktop
+ *  `formatPlaceholderElapsed` tiers. The caller localizes the pair via i18n templates. */
+export const splitProcessElapsed = (milliseconds: number): { minutes: number; seconds: number } => {
+  const totalSeconds = Math.max(0, Math.round(milliseconds / 1000))
+  return { minutes: Math.floor(totalSeconds / 60), seconds: totalSeconds % 60 }
+}

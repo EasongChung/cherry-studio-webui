@@ -2810,13 +2810,34 @@
     margin-bottom: 0;
   }
 
-  /* Live status row for a streaming turn — mirrors the desktop ActiveProcessHeader. */
-  .live-process-header {
+  /* Top elapsed-time row for a streaming turn — mirrors the desktop ActiveProcessHeader
+     summary ("处理中 · 1分23秒"). Spacing comes from below so it sits on the content. */
+  .live-process-elapsed-row {
     display: flex;
     gap: 6px;
     align-items: center;
     min-width: 0;
     margin-bottom: 8px;
+    color: #6b7280;
+    font-size: 13px;
+    line-height: 1.45;
+  }
+
+  .live-process-summary {
+    overflow: hidden;
+    font-weight: 600;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  /* Live status row for a streaming turn — mirrors the desktop live tool group.
+     It sits at the very bottom line of the reply, so spacing comes from the top. */
+  .live-process-header {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+    min-width: 0;
+    margin-top: 8px;
     color: #6b7280;
     font-size: 13px;
     line-height: 1.45;
@@ -5410,6 +5431,7 @@
     color: #9ca3af;
   }
 
+  :root[data-webui-theme='dark'] .live-process-elapsed-row,
   :root[data-webui-theme='dark'] .live-process-header {
     color: #94a3b8;
   }
