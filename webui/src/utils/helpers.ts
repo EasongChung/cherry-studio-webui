@@ -3,6 +3,7 @@ import type {
   WebUiAgentSessionMessageEntity,
   WebUiAgentStatusEvent,
   WebUiCompactionAnchor,
+  WebUiContentBlock,
   WebUiConversationSummary,
   WebUiCreateSessionWorkspace,
   WebUiMessagePart,
@@ -360,6 +361,46 @@ export const toProcessGroups = (
   return groups
 }
 
+/**
+ * Build the interleaved content blocks of a turn in original part order,
+ * mirroring the desktop live layout: reasoning, prose and tool calls render
+ * inline as they streamed; only the final prose tail is the answer.
+ */
+export const toContentBlocks = (parts: readonly WebUiMessagePart[]): readonly WebUiContentBlock[] => {
+  const blocks: WebUiContentBlock[] = []
+
+  for (const part of parts) {
+    if (HIDDEN_PROCESS_PART_TYPES.has(part.type)) continue
+
+    if (part.type === 'reasoning' && typeof part.text === 'string' && part.text.trim()) {
+      blocks.push({
+        kind: 'reasoning',
+        id: part.id ?? `reasoning:${blocks.length}`,
+        content: part.text,
+        isStreaming: part.state === 'streaming'
+      })
+      continue
+    }
+
+    if (part.type === 'text' && typeof part.text === 'string' && part.text.trim()) {
+      blocks.push({
+        kind: 'text',
+        id: part.id ?? `text:${blocks.length}`,
+        content: part.text,
+        isStreaming: part.state === 'streaming'
+      })
+      continue
+    }
+
+    if (isToolMessagePart(part) && part.toolCallId) {
+      const tool = toToolSnapshot(part)
+      if (tool) blocks.push({ kind: 'tool', id: part.toolCallId, tool })
+    }
+  }
+
+  return blocks
+}
+
 export const toAgentStatusEvents = (parts: readonly WebUiMessagePart[]): readonly WebUiAgentStatusEvent[] => {
   const events: WebUiAgentStatusEvent[] = []
 
@@ -493,6 +534,63 @@ export const settleProcessGroups = (groups: readonly WebUiProcessGroup[]): reado
     items: group.items.map((item) => (item.kind === 'reasoning' ? { ...item, isStreaming: false } : item))
   }))
 
+const cloneBlocks = (blocks: readonly WebUiContentBlock[]): WebUiContentBlock[] => [...blocks]
+
+/** Append a reasoning delta to the trailing reasoning block, or open a new one. */
+export const appendContentReasoning = (
+  blocks: readonly WebUiContentBlock[],
+  messageId: string,
+  delta: string
+): readonly WebUiContentBlock[] => {
+  if (!delta) return blocks
+  const next = cloneBlocks(blocks)
+  const last = next.at(-1)
+  if (last?.kind === 'reasoning') {
+    next[next.length - 1] = { ...last, content: `${last.content}${delta}`, isStreaming: true }
+    return next
+  }
+  next.push({
+    kind: 'reasoning',
+    id: `${messageId}:stream-reasoning:${next.length}`,
+    content: delta,
+    isStreaming: true
+  })
+  return next
+}
+
+/** Append a text delta to the trailing text block, or open a new one. */
+export const appendContentText = (
+  blocks: readonly WebUiContentBlock[],
+  messageId: string,
+  delta: string
+): readonly WebUiContentBlock[] => {
+  if (!delta) return blocks
+  const next = cloneBlocks(blocks)
+  const last = next.at(-1)
+  if (last?.kind === 'text') {
+    next[next.length - 1] = { ...last, content: `${last.content}${delta}`, isStreaming: true }
+    return next
+  }
+  next.push({ kind: 'text', id: `${messageId}:stream-text:${next.length}`, content: delta, isStreaming: true })
+  return next
+}
+
+/** Insert or refresh a tool block, replacing the existing one in place. */
+export const upsertContentTool = (
+  blocks: readonly WebUiContentBlock[],
+  messageId: string,
+  tool: WebUiToolCallSnapshot
+): readonly WebUiContentBlock[] => {
+  const next = cloneBlocks(blocks)
+  const index = next.findIndex((block) => block.kind === 'tool' && block.id === tool.id)
+  if (index >= 0) {
+    next[index] = { kind: 'tool', id: tool.id, tool }
+    return next
+  }
+  next.push({ kind: 'tool', id: tool.id, tool })
+  return next
+}
+
 export const toMessageSnapshot = (message: WebUiAgentSessionMessageEntity): WebUiMessageSnapshot => {
   const parts = message.data.parts ?? []
   const content = parts
@@ -505,6 +603,7 @@ export const toMessageSnapshot = (message: WebUiAgentSessionMessageEntity): WebU
     .join('')
   const toolCalls = toToolCalls(parts)
   const processGroups = toProcessGroups(parts, message.id)
+  const contentBlocks = toContentBlocks(parts)
   const agentStatusEvents = toAgentStatusEvents(parts)
   const compactionAnchors = toCompactionAnchors(parts)
   const attachments = parts
@@ -521,6 +620,15 @@ export const toMessageSnapshot = (message: WebUiAgentSessionMessageEntity): WebU
     message.stats?.timeCompletionMs ??
     message.stats?.timeThinkingMs ??
     parts.find((part) => part.type === 'reasoning')?.providerMetadata?.cherry?.thinkingMs
+  // Whole-turn wall clock. The desktop rewrites `updatedAt` on every part append, so
+  // the last write lands when the turn finishes — unlike `timeCompletionMs`, this
+  // covers the tool executions and approval waits between stream rounds.
+  const startedMs = Date.parse(message.createdAt)
+  const finishedMs = Date.parse(message.updatedAt)
+  const totalElapsedMs =
+    Number.isFinite(startedMs) && Number.isFinite(finishedMs) && finishedMs > startedMs
+      ? finishedMs - startedMs
+      : undefined
   const modelId = typeof message.modelId === 'string' && message.modelId.trim() ? message.modelId : undefined
   const tokenStats = toMessageTokenStats(message.stats)
 
@@ -532,12 +640,14 @@ export const toMessageSnapshot = (message: WebUiAgentSessionMessageEntity): WebU
     ...(reasoning ? { reasoning } : {}),
     ...(toolCalls.length ? { toolCalls } : {}),
     ...(processGroups.length ? { processGroups } : {}),
+    ...(contentBlocks.length ? { contentBlocks } : {}),
     ...(compactionAnchors.length ? { compactionAnchors } : {}),
     ...(agentStatusEvents.length ? { agentStatusEvents } : {}),
     ...(attachments.length ? { attachments } : {}),
     ...(modelId ? { modelId } : {}),
     status: message.status,
     ...(processingTimeMs ? { processingTimeMs } : {}),
+    ...(totalElapsedMs ? { totalElapsedMs } : {}),
     ...(tokenStats ? { tokenStats } : {}),
     createdAt: message.createdAt
   }
@@ -583,4 +693,11 @@ export const readFileAsDataUrl = (file: File) =>
 export const formatDuration = (milliseconds: number) => {
   const seconds = Math.max(0.1, milliseconds / 1000)
   return seconds < 10 ? `${seconds.toFixed(1)}s` : `${Math.round(seconds)}s`
+}
+
+/** Split an elapsed duration into whole minutes and seconds, mirroring the desktop
+ *  `formatPlaceholderElapsed` tiers. The caller localizes the pair via i18n templates. */
+export const splitProcessElapsed = (milliseconds: number): { minutes: number; seconds: number } => {
+  const totalSeconds = Math.max(0, Math.round(milliseconds / 1000))
+  return { minutes: Math.floor(totalSeconds / 60), seconds: totalSeconds % 60 }
 }

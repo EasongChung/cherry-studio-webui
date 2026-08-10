@@ -29,6 +29,7 @@ import type {
   WebUiAgentWorkspace,
   WebUiAuthStatusResponse,
   WebUiChunkPayload,
+  WebUiContentBlock,
   WebUiContextUsage,
   WebUiContextUsageResponse,
   WebUiConversationSummary,
@@ -89,21 +90,25 @@ import {
   webUiVersion
 } from './utils/constants'
 import {
+  appendContentReasoning,
+  appendContentText,
   appendProcessReasoning,
   buildConversationGroups,
   conversationGroupKey,
   type ConversationWorkdirGroup,
-  formatDuration,
   isAbortError,
   loadCollapsedWorkdirGroups,
   persistCollapsedWorkdirGroups,
   readFileAsDataUrl,
   resolveWorkspaceSeedFromConversation,
+  splitProcessElapsed,
+  terminalToolStates,
   toConversationSummary,
   toDisplayText,
   toErrorMessage,
   toMessageSnapshot,
   upsertAgentStatusEvent,
+  upsertContentTool,
   upsertProcessTool
 } from './utils/helpers'
 import {
@@ -117,6 +122,7 @@ import {
   renderThemeIcon
 } from './utils/icons'
 import { renderCode, renderMarkdown } from './utils/renderMarkdown'
+import { annotateSpeechSentences } from './utils/speechHighlight'
 import {
   createSpeechSynthesisController,
   DEFAULT_SPEECH_PREFERENCES,
@@ -132,6 +138,7 @@ import {
   type SpeechVoiceOption
 } from './utils/speechSynthesis'
 import { contextCategoryTextKeys, type TextKey, textPacks } from './utils/textPacks'
+import { getToolPresentation, getToolTaskDescription } from './utils/toolPresentation'
 import {
   buildWorkspaceSearchTree,
   getWorkspaceCodeLanguage,
@@ -375,6 +382,28 @@ const App = defineComponent({
         speechState.value = state
       },
       getPreferences: () => speechPreferences.value
+    })
+    /** Plain (markdown-stripped) text of each rendered message, so speech segment
+     *  indices align 1:1 with the `.speech-sentence` spans stamped on the DOM. */
+    const speechPlainTextCache = new Map<string, string>()
+    /**
+     * Highlight the currently spoken sentence. The spans live inside the rendered
+     * markdown (innerHTML), so class updates must happen on the live DOM after render.
+     */
+    watch(speechState, (state) => {
+      void nextTick(() => {
+        document.querySelectorAll('.speech-sentence-active').forEach((element) => {
+          element.classList.remove('speech-sentence-active')
+        })
+        if (!state.isSpeaking || !state.messageId) return
+        const container = document.querySelector<HTMLElement>(
+          `.markdown-content[data-message-id="${CSS.escape(state.messageId)}"]`
+        )
+        const sentence = container?.querySelector<HTMLElement>(
+          `.speech-sentence[data-sentence-index="${state.segmentIndex}"]`
+        )
+        sentence?.classList.add('speech-sentence-active')
+      })
     })
     const pendingChunks = new Map<string, WebUiChunkPayload[]>()
     const pendingChunkRetries = new Map<string, number>()
@@ -629,6 +658,22 @@ const App = defineComponent({
     const text = (key: TextKey) => {
       const pack = textPacks[language.value as keyof typeof textPacks] ?? textPacks[fallbackLanguage]
       return pack[key] ?? textPacks[fallbackLanguage][key]
+    }
+
+    /**
+     * Render message markdown and annotate speakable sentences. The cache entry lets
+     * read-aloud start from the exact same plain text that the sentence spans were
+     * built from, so `segmentIndex` matches the `data-sentence-index` on the DOM.
+     */
+    const renderSpeechMarkdown = (
+      content: string,
+      messageId: string,
+      options: Parameters<typeof renderMarkdown>[1]
+    ): string => {
+      const html = renderMarkdown(content, options)
+      const annotated = annotateSpeechSentences(html)
+      speechPlainTextCache.set(messageId, annotated.plainText)
+      return annotated.html
     }
 
     const conversationGroups = computed(() => buildConversationGroups(conversations.value, text('noProject')))
@@ -953,17 +998,24 @@ const App = defineComponent({
       Boolean(message.processGroups?.length || message.reasoning || message.toolCalls?.length)
     const getProcessSummary = (message: WebUiMessageSnapshot) => {
       processElapsedTick.value
-      if (message.status !== 'pending' && message.processingTimeMs) {
-        return `${text('processingTime')} ${formatDuration(message.processingTimeMs)}`
+      // Completed: mirror the desktop "已处理 N 个工具 · 用时 X" single-row summary.
+      if (message.status !== 'pending') {
+        const toolCount = message.toolCalls?.length ?? 0
+        const action = toolCount
+          ? text('toolCallsProcessed').replace('{{count}}', String(toolCount))
+          : text('reasoning')
+        // Prefer the whole-turn wall clock; `processingTimeMs` only covers one stream
+        // round and under-reports turns that ran tools between rounds.
+        const totalMs = message.totalElapsedMs ?? message.processingTimeMs
+        const duration = totalMs ? formatLiveElapsed(totalMs) : undefined
+        return duration ? `${action} · ${duration}` : action
       }
       // Match desktop live progress: keep one stable process label and append elapsed time while streaming.
       if (message.status === 'pending') {
         const startedAt = Date.parse(message.createdAt)
-        const elapsed = Number.isFinite(startedAt) ? formatDuration(Math.max(0, Date.now() - startedAt)) : undefined
+        const elapsed = Number.isFinite(startedAt) ? formatLiveElapsed(Math.max(0, Date.now() - startedAt)) : undefined
         return elapsed ? `${text('processDetails')} · ${elapsed}` : text('processDetails')
       }
-      if (message.toolCalls?.length)
-        return `${text('processDetails')} · ${message.toolCalls.length} ${text('toolCalls')}`
       return text('reasoning')
     }
     const approvalKey = (messageId: string, toolId: string) => `${messageId}:${toolId}`
@@ -1158,13 +1210,11 @@ const App = defineComponent({
       const previewText = isThinking ? (message.reasoning ?? '').replace(/\s+/g, ' ').trim() : ''
       const showRollingPreview = isThinking && previewText.length > 0
       const openOverride = processOpenOverrides.value.get(message.id)
-      // Strictly follow the desktop auto-collapse preference: when enabled (default), the process block
-      // stays folded while streaming and the latest reasoning sliver rolls in the summary row instead;
-      // when disabled, streaming auto-expands so reasoning/tools render live (user clicks win via override).
-      const isProcessOpen =
-        openOverride !== undefined
-          ? openOverride
-          : isThinking && !thoughtAutoCollapse.value && Boolean(message.reasoning)
+      // Mirror the desktop: while the turn is live the whole process (thinking + tools)
+      // is expanded and streams in order; once completed it collapses into a single row
+      // summary. The thoughtAutoCollapse preference governs the reasoning block inside,
+      // not the process container itself (user clicks win via override).
+      const isProcessOpen = openOverride !== undefined ? openOverride : isThinking
 
       return h(
         'details',
@@ -1199,13 +1249,39 @@ const App = defineComponent({
             'div',
             { class: 'process-history' },
             processGroups.length
-              ? processGroups.map((group) =>
-                  h(
+              ? processGroups.map((group) => {
+                  // Merge consecutive tool items into one collapsible group, mirroring the
+                  // desktop ToolBlockGroup. Reasoning items stay separate so narration reads
+                  // in order with the tools it justifies.
+                  const rows: Array<
+                    | { kind: 'reasoning'; item: Extract<WebUiProcessItem, { kind: 'reasoning' }> }
+                    | { kind: 'tool-group'; tools: readonly WebUiToolCallSnapshot[] }
+                  > = []
+                  let toolRun: WebUiToolCallSnapshot[] = []
+                  const flushToolRun = () => {
+                    if (!toolRun.length) return
+                    rows.push({ kind: 'tool-group', tools: toolRun })
+                    toolRun = []
+                  }
+                  for (const item of group.items) {
+                    if (item.kind === 'reasoning') {
+                      flushToolRun()
+                      rows.push({ kind: 'reasoning', item })
+                    } else {
+                      toolRun.push(item.tool)
+                    }
+                  }
+                  flushToolRun()
+
+                  return h(
                     'div',
                     { class: 'process-history-group', key: group.id },
-                    group.items.map((item: WebUiProcessItem) => {
-                      if (item.kind === 'reasoning') {
-                        return h('details', { class: 'reasoning-block', key: item.id, open: item.isStreaming }, [
+                    rows.map((row) => {
+                      if (row.kind === 'reasoning') {
+                        // Desktop ThinkingBlock defaults folded; the auto-collapse preference
+                        // forces it closed while streaming so the summary sliver rolls instead.
+                        const reasoningOpen = !thoughtAutoCollapse.value && row.item.isStreaming
+                        return h('details', { class: 'reasoning-block', key: row.item.id, open: reasoningOpen }, [
                           h('summary', [
                             h('span', { class: 'process-item-indicator', 'aria-hidden': 'true' }),
                             h('span', text('reasoning'))
@@ -1213,7 +1289,7 @@ const App = defineComponent({
                           h('div', {
                             class: 'markdown-content process-reasoning-content',
                             onClick: handleMarkdownContentClick,
-                            innerHTML: renderMarkdown(item.content, {
+                            innerHTML: renderMarkdown(row.item.content, {
                               copyCodeLabel: text('copyCode'),
                               downloadCodeLabel: text('downloadSource'),
                               wrapLinesLabel: text('wrapLines')
@@ -1222,20 +1298,51 @@ const App = defineComponent({
                         ])
                       }
 
-                      const tool = item.tool
-                      return h(ToolCallBlock, {
-                        key: item.id,
-                        tool,
-                        message,
-                        text,
-                        submitting: isApprovalSubmitting(message.id, tool.id),
-                        approvalError: approvalErrorByKey.value[approvalKey(message.id, tool.id)],
-                        onApprove: () => void respondToolApproval(tool, message, true),
-                        onDeny: () => void respondToolApproval(tool, message, false)
-                      })
+                      const renderTool = (tool: WebUiToolCallSnapshot) =>
+                        h(ToolCallBlock, {
+                          key: tool.id,
+                          tool,
+                          message,
+                          text,
+                          submitting: isApprovalSubmitting(message.id, tool.id),
+                          approvalError: approvalErrorByKey.value[approvalKey(message.id, tool.id)],
+                          onApprove: () => void respondToolApproval(tool, message, true),
+                          onDeny: () => void respondToolApproval(tool, message, false)
+                        })
+
+                      // Single tool stays a bare card; multiple consecutive tools collapse.
+                      if (row.tools.length === 1) return renderTool(row.tools[0]!)
+                      const anyActive = row.tools.some(
+                        (tool) => message.status === 'pending' && !terminalToolStates.has(tool.state)
+                      )
+                      const latest = row.tools[row.tools.length - 1]!
+                      const presentation = getToolPresentation(latest.name)
+                      const latestTask = getToolTaskDescription(latest.name, latest.input)
+                      return h(
+                        'details',
+                        {
+                          class: ['tool-call-group', { 'tool-call-group-pending': anyActive }],
+                          key: `group:${row.tools.map((tool) => tool.id).join('|')}`,
+                          ...(anyActive ? { open: true } : {})
+                        },
+                        [
+                          h('summary', [
+                            h('span', { class: 'tool-call-group-indicator', 'aria-hidden': 'true' }),
+                            h('span', { class: 'tool-call-icon', 'aria-hidden': 'true' }, presentation.icon),
+                            h(
+                              'span',
+                              { class: 'tool-call-group-summary' },
+                              latestTask
+                                ? `${text(presentation.labelKey)} · ${latestTask}`
+                                : `${text(presentation.labelKey)} · ${row.tools.length}`
+                            )
+                          ]),
+                          h('div', { class: 'tool-call-group-body' }, row.tools.map(renderTool))
+                        ]
+                      )
                     })
                   )
-                )
+                })
               : message.reasoning
                 ? [
                     h('details', { class: 'reasoning-block', open: isThinking }, [
@@ -1255,6 +1362,303 @@ const App = defineComponent({
           )
         ]
       )
+    }
+
+    const renderReasoningBlock = (id: string, content: string, isStreaming: boolean | undefined, open?: boolean) => {
+      // Desktop ThinkingBlock defaults folded; the auto-collapse preference forces it
+      // closed while streaming so the summary sliver rolls instead. Completed blocks
+      // stay foldable by the user.
+      const reasoningOpen = open ?? (!thoughtAutoCollapse.value && isStreaming)
+      return h('details', { class: 'reasoning-block', key: id, open: reasoningOpen }, [
+        h('summary', [
+          h('span', { class: 'process-item-indicator', 'aria-hidden': 'true' }),
+          h('span', text('reasoning'))
+        ]),
+        h('div', {
+          class: 'markdown-content process-reasoning-content',
+          onClick: handleMarkdownContentClick,
+          innerHTML: renderMarkdown(content, {
+            copyCodeLabel: text('copyCode'),
+            downloadCodeLabel: text('downloadSource'),
+            wrapLinesLabel: text('wrapLines')
+          })
+        })
+      ])
+    }
+
+    const renderToolCard = (tool: WebUiToolCallSnapshot, message: WebUiMessageSnapshot) =>
+      h(ToolCallBlock, {
+        key: tool.id,
+        tool,
+        message,
+        text,
+        submitting: isApprovalSubmitting(message.id, tool.id),
+        approvalError: approvalErrorByKey.value[approvalKey(message.id, tool.id)],
+        onApprove: () => void respondToolApproval(tool, message, true),
+        onDeny: () => void respondToolApproval(tool, message, false)
+      })
+
+    /**
+     * Merge a run of consecutive tool calls the way the desktop ToolBlockGroup does:
+     * a lone tool stays a bare card, several collapse behind one summary row.
+     */
+    const renderToolRun = (tools: readonly WebUiToolCallSnapshot[], message: WebUiMessageSnapshot) => {
+      if (tools.length === 1) return renderToolCard(tools[0]!, message)
+      const anyActive = tools.some((tool) => message.status === 'pending' && !terminalToolStates.has(tool.state))
+      const latest = tools[tools.length - 1]!
+      const presentation = getToolPresentation(latest.name)
+      const latestTask = getToolTaskDescription(latest.name, latest.input)
+      return h(
+        'details',
+        {
+          class: ['tool-call-group', { 'tool-call-group-pending': anyActive }],
+          key: `group:${tools.map((tool) => tool.id).join('|')}`,
+          ...(anyActive ? { open: true } : {})
+        },
+        [
+          h('summary', [
+            h('span', { class: 'tool-call-group-indicator', 'aria-hidden': 'true' }),
+            h('span', { class: 'tool-call-icon', 'aria-hidden': 'true' }, presentation.icon),
+            h(
+              'span',
+              { class: 'tool-call-group-summary' },
+              latestTask
+                ? `${text(presentation.labelKey)} · ${latestTask}`
+                : `${text(presentation.labelKey)} · ${tools.length}`
+            )
+          ]),
+          h(
+            'div',
+            { class: 'tool-call-group-body' },
+            tools.map((tool) => renderToolCard(tool, message))
+          )
+        ]
+      )
+    }
+
+    /**
+     * Split blocks into alternating process / prose segments, mirroring the desktop
+     * `groupNestedHistoryEntries`: reasoning and tool calls collect into one process
+     * run, and any prose between them breaks the run and renders on its own.
+     */
+    const groupContentBlocks = (blocks: readonly WebUiContentBlock[]) => {
+      const items: Array<
+        | { kind: 'process'; key: string; blocks: readonly WebUiContentBlock[] }
+        | { kind: 'prose'; key: string; block: Extract<WebUiContentBlock, { kind: 'text' }> }
+      > = []
+      let processRun: WebUiContentBlock[] = []
+      const flushProcess = () => {
+        if (!processRun.length) return
+        items.push({ kind: 'process', key: `process:${processRun[0]!.id}`, blocks: processRun })
+        processRun = []
+      }
+
+      for (const block of blocks) {
+        if (block.kind === 'text') {
+          flushProcess()
+          items.push({ kind: 'prose', key: block.id, block })
+          continue
+        }
+        processRun.push(block)
+      }
+      flushProcess()
+      return items
+    }
+
+    /** Render one process run: reasoning stays a thinking block, consecutive tools merge into a group. */
+    const renderProcessSegment = (blocks: readonly WebUiContentBlock[], message: WebUiMessageSnapshot) => {
+      const nodes: VNode[] = []
+      let toolRun: WebUiToolCallSnapshot[] = []
+      const flushToolRun = () => {
+        if (!toolRun.length) return
+        nodes.push(renderToolRun(toolRun, message))
+        toolRun = []
+      }
+
+      for (const block of blocks) {
+        if (block.kind === 'tool') {
+          toolRun.push(block.tool)
+          continue
+        }
+        flushToolRun()
+        if (block.kind === 'reasoning') {
+          nodes.push(renderReasoningBlock(block.id, block.content, block.isStreaming))
+        }
+      }
+      flushToolRun()
+      return nodes
+    }
+
+    /**
+     * Formats the elapsed milliseconds into minutes:seconds using the i18n templates,
+     * mirroring the desktop `formatPlaceholderElapsed` tiered output.
+     */
+    const formatLiveElapsed = (milliseconds: number): string => {
+      const { minutes, seconds } = splitProcessElapsed(milliseconds)
+      return minutes > 0
+        ? text('elapsedMinutes').replace('{{minutes}}', String(minutes)).replace('{{seconds}}', String(seconds))
+        : text('elapsedSeconds').replace('{{seconds}}', String(seconds))
+    }
+
+    /**
+     * Top row of a live turn: "处理中 · 1分23秒", mirroring the desktop
+     * `ActiveProcessHeader` with `preferSummary`. The summary label is always
+     * `text('processing')` followed by the real-time elapsed time.
+     * Only rendered while the message is still pending.
+     */
+    const renderProcessElapsedRow = (message: WebUiMessageSnapshot) => {
+      processElapsedTick.value
+      const startedAt = Date.parse(message.createdAt)
+      const elapsed = Number.isFinite(startedAt) ? formatLiveElapsed(Math.max(0, Date.now() - startedAt)) : undefined
+
+      return h('div', { class: 'live-process-elapsed-row', key: `${message.id}:live-elapsed` }, [
+        h('span', { class: 'process-state-indicator', 'aria-hidden': 'true' }),
+        h('span', { class: 'live-process-summary' }, text('processing')),
+        elapsed ? h('span', { class: 'live-process-elapsed' }, elapsed) : undefined
+      ])
+    }
+
+    /**
+     * Bottom status row of a live turn: "正在调用 读取文件 · src/main.ts" when a
+     * tool is active, or "正在思考…" when the model is reasoning.  Disappears once
+     * the message finishes or is interrupted, matching the desktop `PlaceholderBlock`
+     * / `ToolBlockGroup isLiveProgress` behaviour.
+     */
+    const renderLiveProcessStatus = (message: WebUiMessageSnapshot) => {
+      processElapsedTick.value
+      const tools = message.toolCalls ?? []
+      const active =
+        tools.filter((tool) => tool.state === 'approval-requested').at(-1) ??
+        tools.filter((tool) => !terminalToolStates.has(tool.state)).at(-1)
+      // Annotated: `text()` returns a union of every pack literal, and
+      // interpolating it into a template without a `string` target blows past
+      // the union complexity limit.
+      let label: string = text('thinkingLive')
+      if (active) {
+        const presentation = getToolPresentation(active.name)
+        const task = getToolTaskDescription(active.name, active.input)
+        const toolLabel = task ? `${text(presentation.labelKey)} · ${task}` : text(presentation.labelKey)
+        label = `${text('invokingTool')} ${toolLabel}`
+      }
+
+      return h('div', { class: 'live-process-header', key: `${message.id}:live-status` }, [
+        h('span', { class: 'process-state-indicator', 'aria-hidden': 'true' }),
+        h('span', { class: 'live-process-task' }, label),
+        h('span', { class: 'live-process-dots', 'aria-hidden': 'true' }, [h('i'), h('i'), h('i')])
+      ])
+    }
+
+    /**
+     * Render an assistant turn's body from its ordered content blocks, mirroring the
+     * desktop agent pane: reasoning, prose and tool cards stay in streaming order and
+     * interleave, with only the trailing prose acting as the final answer.
+     */
+    const renderMessageContentBlocks = (message: WebUiMessageSnapshot) => {
+      const blocks = message.contentBlocks
+      if (!blocks?.length) return undefined
+
+      // The trailing text block is the answer; everything before it is process history.
+      let lastTextIndex = -1
+      for (let index = blocks.length - 1; index >= 0; index--) {
+        if (blocks[index]?.kind === 'text') {
+          lastTextIndex = index
+          break
+        }
+      }
+      const historyBlocks = lastTextIndex >= 0 ? blocks.slice(0, lastTextIndex) : blocks
+      const lastBlock = lastTextIndex >= 0 ? blocks[lastTextIndex] : undefined
+      const finalText = lastBlock?.kind === 'text' ? lastBlock : undefined
+      const isThinking = message.status === 'pending'
+
+      const historyNodes: VNode[] = []
+      for (const item of groupContentBlocks(historyBlocks)) {
+        if (item.kind === 'prose') {
+          historyNodes.push(
+            h('div', {
+              class: 'markdown-content process-narration',
+              key: item.key,
+              onClick: handleMarkdownContentClick,
+              innerHTML: renderMarkdown(item.block.content, {
+                copyCodeLabel: text('copyCode'),
+                downloadCodeLabel: text('downloadSource'),
+                wrapLinesLabel: text('wrapLines')
+              })
+            })
+          )
+          continue
+        }
+        historyNodes.push(
+          h('div', { class: 'process-segment', key: item.key }, renderProcessSegment(item.blocks, message))
+        )
+      }
+
+      const nodes: VNode[] = []
+      if (historyNodes.length) {
+        if (isThinking) {
+          // Active phase: top time row + flat history (no collapse shell).
+          nodes.push(renderProcessElapsedRow(message))
+          nodes.push(...historyNodes)
+        } else {
+          // Terminal phase: the desktop folds the whole history — narration included —
+          // behind one "已处理 N 个工具 · 用时 X" row, leaving only the final answer outside.
+          const openOverride = processOpenOverrides.value.get(message.id)
+          const isProcessOpen = openOverride ?? false
+          nodes.push(
+            h(
+              'details',
+              {
+                class: 'process-block',
+                key: `${message.id}:process-history`,
+                ...(isProcessOpen ? { open: true } : {})
+              },
+              [
+                h(
+                  'summary',
+                  {
+                    onClick: (event: MouseEvent) => {
+                      const details = (event.currentTarget as HTMLElement).closest('details')
+                      const next = new Map(processOpenOverrides.value)
+                      next.set(message.id, !(details?.open ?? false))
+                      processOpenOverrides.value = next
+                    }
+                  },
+                  [
+                    h('span', { class: 'process-state-indicator', 'aria-hidden': 'true' }),
+                    h('span', { class: 'process-summary' }, getProcessSummary(message))
+                  ]
+                ),
+                h('div', { class: 'process-history' }, historyNodes)
+              ]
+            )
+          )
+        }
+      }
+
+      if (finalText) {
+        nodes.push(
+          h('div', {
+            class: 'markdown-content',
+            'data-message-id': message.id,
+            ...(speechState.value.messageId === message.id && speechState.value.isSpeaking
+              ? { 'data-reading': '' }
+              : {}),
+            onClick: handleMarkdownContentClick,
+            innerHTML: renderSpeechMarkdown(finalText.content, message.id, {
+              copyCodeLabel: text('copyCode'),
+              downloadCodeLabel: text('downloadSource'),
+              wrapLinesLabel: text('wrapLines')
+            })
+          })
+        )
+      }
+
+      // Live status sits on the bottom line of the reply, so the current activity
+      // stays visible while the stream auto-scrolls. Interrupted or finished turns
+      // drop it entirely (the `isThinking` guard closes on non-pending status).
+      if (isThinking && (historyNodes.length || !finalText)) {
+        nodes.push(renderLiveProcessStatus(message))
+      }
+      return nodes
     }
 
     const workspaceApiPath = (route: 'files' | 'file' | 'preview', requestPath = '', search = '') => {
@@ -1673,6 +2077,24 @@ const App = defineComponent({
     }
 
     const handleMarkdownContentClick = (event: MouseEvent) => {
+      // Clicking a sentence span starts read-aloud from that sentence.
+      const sentence =
+        event.target instanceof Element ? event.target.closest<HTMLElement>('[data-sentence-index]') : null
+      if (sentence) {
+        const messageElement = sentence.closest<HTMLElement>('[data-message-id]')
+        const messageId = messageElement?.dataset.messageId
+        const index = Number(sentence.dataset.sentenceIndex)
+        if (messageId && Number.isInteger(index) && index >= 0) {
+          // Sentence-click only rewinds the read-aloud session once the user has
+          // started reading via the message footer button — a bare click does nothing.
+          if (speechState.value.messageId === messageId && speechState.value.isSpeaking) {
+            event.preventDefault()
+            speechController.jumpToSegment(index)
+          }
+        }
+        return
+      }
+
       const target =
         event.target instanceof Element
           ? event.target.closest<HTMLElement>(
@@ -2514,13 +2936,16 @@ const App = defineComponent({
 
       modelUpdateState.value = 'updating'
       submitError.value = ''
+      // Dismiss on selection, not on success — a failed request reports through
+      // `submitError` and should not leave the menu hanging open.
+      modelPickerOpen.value = false
+      compactHeaderPickerOpen.value = false
       try {
         await httpClient.patchJson(`/api/agent-sessions/${encodeURIComponent(conversationId)}/model`, {
           model: model.id
         })
         await loadAgents()
         refreshComposerInfo(conversationId)
-        modelPickerOpen.value = false
         modelUpdateState.value = 'idle'
       } catch (error) {
         submitError.value = localizedErrorMessage(error)
@@ -2534,12 +2959,13 @@ const App = defineComponent({
         return
       agentUpdateState.value = 'updating'
       submitError.value = ''
+      agentPickerOpen.value = false
+      compactHeaderPickerOpen.value = false
       try {
         await httpClient.patchJson(`/api/data/agent-sessions/${encodeURIComponent(conversationId)}`, { agentId })
         await loadAgents()
         // SSE session-updated 会触发 refreshFromDesktopSync → loadConversations
         refreshSkills(agentId)
-        agentPickerOpen.value = false
         agentUpdateState.value = 'idle'
       } catch (error) {
         submitError.value = localizedErrorMessage(error)
@@ -2580,10 +3006,11 @@ const App = defineComponent({
       if (!conversationId || workspaceUpdateState.value === 'updating') return
       workspaceUpdateState.value = 'updating'
       submitError.value = ''
+      workspacePickerOpen.value = false
+      compactHeaderPickerOpen.value = false
       try {
         const body = workspaceId ? { type: 'user' as const, workspaceId } : { type: 'system' as const }
         await httpClient.putJson(`/api/data/agent-sessions/${encodeURIComponent(conversationId)}/workspace`, body)
-        workspacePickerOpen.value = false
         workspaceUpdateState.value = 'idle'
         await loadConversations()
       } catch (error) {
@@ -2605,13 +3032,14 @@ const App = defineComponent({
 
       permissionModeUpdateState.value = 'updating'
       submitError.value = ''
+      permissionModePickerOpen.value = false
+      compactHeaderPickerOpen.value = false
       try {
         await httpClient.patchJson<WebUiPermissionModeResponse>(
           `/api/agent-sessions/${encodeURIComponent(conversationId)}/permission-mode`,
           { permissionMode: mode }
         )
         await loadAgents()
-        permissionModePickerOpen.value = false
         permissionModeUpdateState.value = 'idle'
       } catch (error) {
         submitError.value = localizedErrorMessage(error)
@@ -3079,7 +3507,11 @@ const App = defineComponent({
         // Terminal or already-authoritative rows must not keep appending (duplicate body after long thinking).
         if (streamSealed) return true
         if (message.content.endsWith(chunk.delta)) return true
-        nextMessages[messageIndex] = { ...message, content: `${message.content}${chunk.delta}` }
+        nextMessages[messageIndex] = {
+          ...message,
+          content: `${message.content}${chunk.delta}`,
+          contentBlocks: appendContentText(message.contentBlocks ?? [], message.id, chunk.delta)
+        }
       } else if (chunk.type === 'reasoning-delta' && chunk.delta) {
         if (streamSealed) return true
         const previousReasoning = message.reasoning ?? ''
@@ -3087,7 +3519,8 @@ const App = defineComponent({
         nextMessages[messageIndex] = {
           ...message,
           reasoning: `${previousReasoning}${chunk.delta}`,
-          processGroups: appendProcessReasoning(message.processGroups ?? [], message.id, chunk.delta)
+          processGroups: appendProcessReasoning(message.processGroups ?? [], message.id, chunk.delta),
+          contentBlocks: appendContentReasoning(message.contentBlocks ?? [], message.id, chunk.delta)
         }
         scrollThinkingPreview()
       } else if (chunk.type === 'data-agent-task-event' && isWebUiAgentTaskEventData(chunk.data)) {
@@ -3164,6 +3597,7 @@ const App = defineComponent({
           ...message,
           toolCalls: [...previousTools.filter((tool) => tool.id !== chunk.toolCallId), nextTool],
           processGroups: upsertProcessTool(message.processGroups ?? [], message.id, nextTool),
+          contentBlocks: upsertContentTool(message.contentBlocks ?? [], message.id, nextTool),
           agentStatusEvents: upsertAgentStatusEvent(previousStatusEvents, {
             kind: 'tool',
             id: chunk.toolCallId,
@@ -3701,7 +4135,9 @@ const App = defineComponent({
 
     const abortMessage = async () => {
       const conversationId = selectedConversationId.value
-      if (!conversationId || activeRunConversationId.value !== conversationId) return
+      // The run id can already be cleared while the turn is still pending (late `done`
+      // ordering); keep aborting whenever the composer shows the stop affordance.
+      if (!conversationId || !isCurrentlyStreaming.value) return
 
       try {
         await httpClient.postJson(`/api/agent-sessions/${encodeURIComponent(conversationId)}/abort`, {})
@@ -3713,7 +4149,7 @@ const App = defineComponent({
       }
     }
 
-    const toggleReadMessageAloud = (message: WebUiMessageSnapshot) => {
+    const toggleReadMessageAloud = (message: WebUiMessageSnapshot, startIndex = 0) => {
       if (!speechController.refreshSupport()) {
         showSpeechNotice(text('speechUnavailable'), message.id)
         return
@@ -3729,7 +4165,10 @@ const App = defineComponent({
       if (speechPanelPreferences.value.autoOpenPanel) {
         openSpeechPanel()
       }
-      speechController.speak(message.id, message.content, language.value)
+      // Speak the rendered plain text (the same text the sentence spans were built from)
+      // so `segmentIndex` aligns with the `data-sentence-index` on the DOM.
+      const plainText = speechPlainTextCache.get(message.id) ?? message.content
+      speechController.speak(message.id, plainText, language.value, startIndex)
     }
 
     const formatCompactNumber = (value: number): string => {
@@ -4133,6 +4572,24 @@ const App = defineComponent({
     }
 
     /**
+     * Dismiss every toggle-driven popover when a pointer lands outside all of them.
+     * Surfaces and their triggers opt in via `webui-popover-surface` /
+     * `webui-popover-trigger`; a trigger is excluded so its own toggle handler stays
+     * authoritative instead of being closed here and immediately reopened.
+     *
+     * The slash-command menu is deliberately not closed: it is derived from the
+     * composer text rather than a toggle, so dismissing it on an outside click
+     * would fight the user still typing the command.
+     */
+    const handlePopoverOutsidePointerDown = (event: PointerEvent) => {
+      const target = event.target
+      if (!(target instanceof Element)) return
+      if (target.closest('.webui-popover-surface, .webui-popover-trigger')) return
+      closeOtherComposerPopovers()
+      compactHeaderPickerOpen.value = false
+    }
+
+    /**
      * Full launcher catalog, in desktop section order:
      * primary tools → slash commands → resources (skills / knowledge bases).
      *
@@ -4480,6 +4937,7 @@ const App = defineComponent({
 
     onMounted(() => {
       applyThemeMode()
+      document.addEventListener('pointerdown', handlePopoverOutsidePointerDown)
       processElapsedTimer = window.setInterval(() => {
         if (isCurrentlyStreaming.value) processElapsedTick.value += 1
       }, 1000)
@@ -4536,6 +4994,7 @@ const App = defineComponent({
     onBeforeUnmount(() => {
       clearStatusPreviewTimers()
       saveComposerDraft()
+      document.removeEventListener('pointerdown', handlePopoverOutsidePointerDown)
       if (bottomWheelSettleTimer !== undefined) window.clearTimeout(bottomWheelSettleTimer)
       if (workspaceFileSearchTimer !== undefined) window.clearTimeout(workspaceFileSearchTimer)
       releaseWorkspacePreview()
@@ -4673,7 +5132,7 @@ const App = defineComponent({
           h(
             'button',
             {
-              class: 'chat-header-selector-button',
+              class: 'chat-header-selector-button webui-popover-trigger',
               type: 'button',
               title: `${text('switchAgent')}: ${selectedAgentName.value ?? text('selectAgent')}`,
               'aria-label': text('switchAgent'),
@@ -4691,7 +5150,11 @@ const App = defineComponent({
             ]
           ),
           agentPickerOpen.value
-            ? h('div', { class: 'chat-header-picker-menu', role: 'listbox' }, renderAgentPickerOptions())
+            ? h(
+                'div',
+                { class: 'chat-header-picker-menu webui-popover-surface', role: 'listbox' },
+                renderAgentPickerOptions()
+              )
             : undefined
         ]),
         // Model selector
@@ -4699,7 +5162,7 @@ const App = defineComponent({
           h(
             'button',
             {
-              class: 'chat-header-selector-button',
+              class: 'chat-header-selector-button webui-popover-trigger',
               type: 'button',
               title: `${selectedAgentName.value ?? ''}: ${modelPickerLabel.value}`,
               'aria-label': text('model'),
@@ -4721,7 +5184,11 @@ const App = defineComponent({
             ]
           ),
           modelPickerOpen.value
-            ? h('div', { class: 'chat-header-picker-menu', role: 'listbox' }, renderModelPickerOptions())
+            ? h(
+                'div',
+                { class: 'chat-header-picker-menu webui-popover-surface', role: 'listbox' },
+                renderModelPickerOptions()
+              )
             : undefined
         ]),
         // Workspace selector
@@ -4729,7 +5196,7 @@ const App = defineComponent({
           h(
             'button',
             {
-              class: 'chat-header-selector-button',
+              class: 'chat-header-selector-button webui-popover-trigger',
               type: 'button',
               title: text('workspace'),
               'aria-label': text('workspace'),
@@ -4754,7 +5221,11 @@ const App = defineComponent({
             ]
           ),
           workspacePickerOpen.value
-            ? h('div', { class: 'chat-header-picker-menu', role: 'listbox' }, renderWorkspacePickerOptions())
+            ? h(
+                'div',
+                { class: 'chat-header-picker-menu webui-popover-surface', role: 'listbox' },
+                renderWorkspacePickerOptions()
+              )
             : undefined
         ])
       ])
@@ -4764,7 +5235,7 @@ const App = defineComponent({
         h(
           'button',
           {
-            class: 'chat-header-selector-button mobile-header-selector-button',
+            class: 'chat-header-selector-button mobile-header-selector-button webui-popover-trigger',
             type: 'button',
             title: modelUpdateState.value === 'updating' ? text('generating') : modelPickerLabel.value,
             'aria-label': text('switchAgent'),
@@ -4786,20 +5257,24 @@ const App = defineComponent({
           ]
         ),
         compactHeaderPickerOpen.value
-          ? h('div', { class: 'chat-header-picker-menu mobile-header-picker-menu', role: 'menu' }, [
-              h('section', { class: 'mobile-header-picker-group' }, [
-                h('p', { class: 'mobile-header-picker-group-title' }, text('switchAgent')),
-                renderAgentPickerOptions()
-              ]),
-              h('section', { class: 'mobile-header-picker-group' }, [
-                h('p', { class: 'mobile-header-picker-group-title' }, text('model')),
-                renderModelPickerOptions()
-              ]),
-              h('section', { class: 'mobile-header-picker-group' }, [
-                h('p', { class: 'mobile-header-picker-group-title' }, text('workspace')),
-                renderWorkspacePickerOptions()
-              ])
-            ])
+          ? h(
+              'div',
+              { class: 'chat-header-picker-menu mobile-header-picker-menu webui-popover-surface', role: 'menu' },
+              [
+                h('section', { class: 'mobile-header-picker-group' }, [
+                  h('p', { class: 'mobile-header-picker-group-title' }, text('switchAgent')),
+                  renderAgentPickerOptions()
+                ]),
+                h('section', { class: 'mobile-header-picker-group' }, [
+                  h('p', { class: 'mobile-header-picker-group-title' }, text('model')),
+                  renderModelPickerOptions()
+                ]),
+                h('section', { class: 'mobile-header-picker-group' }, [
+                  h('p', { class: 'mobile-header-picker-group-title' }, text('workspace')),
+                  renderWorkspacePickerOptions()
+                ])
+              ]
+            )
           : undefined
       ])
 
@@ -5396,48 +5871,91 @@ const App = defineComponent({
                           h('header', { class: 'message-header' }, [
                             h('p', { class: 'message-role' }, messageHeaderLabel(message))
                           ]),
-                          renderProcessDetails(message),
-                          renderCompactionAnchors(message),
-                          message.attachments?.length
-                            ? h(
-                                'div',
-                                { class: 'message-attachments' },
-                                message.attachments.map((attachment) =>
-                                  attachment.fileEntryId
-                                    ? h(
-                                        'button',
-                                        {
-                                          class: ['message-attachment', 'message-attachment-link'],
-                                          type: 'button',
-                                          title: attachment.mediaType || attachment.name,
-                                          onClick: () => void openMessageAttachment(attachment)
-                                        },
-                                        attachment.name
+                          // New interleaved layout when ordered content blocks are available;
+                          // falls back to the legacy process-block + content split otherwise.
+                          ...(message.contentBlocks?.length
+                            ? [
+                                ...(renderMessageContentBlocks(message) ?? []),
+                                renderCompactionAnchors(message),
+                                message.attachments?.length
+                                  ? h(
+                                      'div',
+                                      { class: 'message-attachments' },
+                                      message.attachments.map((attachment) =>
+                                        attachment.fileEntryId
+                                          ? h(
+                                              'button',
+                                              {
+                                                class: ['message-attachment', 'message-attachment-link'],
+                                                type: 'button',
+                                                title: attachment.mediaType || attachment.name,
+                                                onClick: () => void openMessageAttachment(attachment)
+                                              },
+                                              attachment.name
+                                            )
+                                          : h(
+                                              'span',
+                                              {
+                                                class: 'message-attachment',
+                                                title: attachment.mediaType || attachment.name
+                                              },
+                                              attachment.name
+                                            )
                                       )
-                                    : h(
-                                        'span',
-                                        {
-                                          class: 'message-attachment',
-                                          title: attachment.mediaType || attachment.name
-                                        },
-                                        attachment.name
+                                    )
+                                  : undefined
+                              ]
+                            : [
+                                renderProcessDetails(message),
+                                renderCompactionAnchors(message),
+                                message.attachments?.length
+                                  ? h(
+                                      'div',
+                                      { class: 'message-attachments' },
+                                      message.attachments.map((attachment) =>
+                                        attachment.fileEntryId
+                                          ? h(
+                                              'button',
+                                              {
+                                                class: ['message-attachment', 'message-attachment-link'],
+                                                type: 'button',
+                                                title: attachment.mediaType || attachment.name,
+                                                onClick: () => void openMessageAttachment(attachment)
+                                              },
+                                              attachment.name
+                                            )
+                                          : h(
+                                              'span',
+                                              {
+                                                class: 'message-attachment',
+                                                title: attachment.mediaType || attachment.name
+                                              },
+                                              attachment.name
+                                            )
                                       )
-                                )
-                              )
-                            : undefined,
-                          message.content
-                            ? h('div', {
-                                class: 'markdown-content',
-                                onClick: handleMarkdownContentClick,
-                                innerHTML: renderMarkdown(message.content, {
-                                  copyCodeLabel: text('copyCode'),
-                                  downloadCodeLabel: text('downloadSource'),
-                                  wrapLinesLabel: text('wrapLines')
-                                })
-                              })
-                            : message.toolCalls?.length
-                              ? undefined
-                              : h('span', { class: 'streaming-placeholder', 'aria-label': text('generating') }),
+                                    )
+                                  : undefined,
+                                message.content
+                                  ? h('div', {
+                                      class: 'markdown-content',
+                                      'data-message-id': message.id,
+                                      ...(speechState.value.messageId === message.id && speechState.value.isSpeaking
+                                        ? { 'data-reading': '' }
+                                        : {}),
+                                      onClick: handleMarkdownContentClick,
+                                      innerHTML: renderSpeechMarkdown(message.content, message.id, {
+                                        copyCodeLabel: text('copyCode'),
+                                        downloadCodeLabel: text('downloadSource'),
+                                        wrapLinesLabel: text('wrapLines')
+                                      })
+                                    })
+                                  : message.toolCalls?.length
+                                    ? undefined
+                                    : h('span', {
+                                        class: 'streaming-placeholder',
+                                        'aria-label': text('generating')
+                                      })
+                              ]),
                           h('footer', { class: 'message-footer' }, [
                             h('span', { class: 'message-footer-meta' }, [
                               h(
@@ -5672,6 +6190,7 @@ const App = defineComponent({
                             {
                               class: [
                                 'composer-tool-button',
+                                'webui-popover-trigger',
                                 { 'composer-tool-button-active': reasoningEffort.value !== 'default' }
                               ],
                               type: 'button',
@@ -5696,6 +6215,7 @@ const App = defineComponent({
                             {
                               class: [
                                 'composer-tool-button',
+                                'webui-popover-trigger',
                                 {
                                   'composer-tool-button-active': selectedPermissionMode.value !== 'default',
                                   'composer-tool-button-caution': selectedPermissionMode.value === 'bypassPermissions'
@@ -5723,6 +6243,7 @@ const App = defineComponent({
                                 {
                                   class: [
                                     'composer-tool-button',
+                                    'webui-popover-trigger',
                                     { 'composer-tool-button-active': skillPickerOpen.value }
                                   ],
                                   type: 'button',
@@ -5749,6 +6270,7 @@ const App = defineComponent({
                                 {
                                   class: [
                                     'composer-tool-button',
+                                    'webui-popover-trigger',
                                     { 'composer-tool-button-active': kbPickerOpen.value }
                                   ],
                                   type: 'button',
@@ -5887,9 +6409,7 @@ const App = defineComponent({
                             }
                           },
                           renderActionIcon(
-                            activeRunConversationId.value === selectedConversationId.value &&
-                              !composerText.value.trim() &&
-                              attachments.value.length === 0
+                            isCurrentlyStreaming.value && !composerText.value.trim() && attachments.value.length === 0
                               ? 'stop'
                               : 'send'
                           )
@@ -5898,7 +6418,7 @@ const App = defineComponent({
                       reasoningPickerOpen.value
                         ? h(
                             'div',
-                            { class: 'reasoning-picker-menu', role: 'listbox' },
+                            { class: 'reasoning-picker-menu webui-popover-surface', role: 'listbox' },
                             reasoningOptions.value.map((option) =>
                               h(
                                 'button',
@@ -5937,7 +6457,7 @@ const App = defineComponent({
                       permissionModePickerOpen.value
                         ? h(
                             'div',
-                            { class: 'permission-mode-picker-menu', role: 'listbox' },
+                            { class: 'permission-mode-picker-menu webui-popover-surface', role: 'listbox' },
                             permissionModeCards.value.map((card) =>
                               h(
                                 'button',
@@ -6021,7 +6541,7 @@ const App = defineComponent({
                       slashCommandSuggestions.value.length
                         ? h(
                             'div',
-                            { class: 'slash-command-menu', role: 'listbox' },
+                            { class: 'slash-command-menu webui-popover-surface', role: 'listbox' },
                             slashCommandSuggestions.value.map((command) =>
                               h(
                                 'button',
@@ -6045,7 +6565,7 @@ const App = defineComponent({
                           )
                         : undefined,
                       skillPickerOpen.value
-                        ? h('div', { class: 'skill-picker-menu', role: 'listbox' }, [
+                        ? h('div', { class: 'skill-picker-menu webui-popover-surface', role: 'listbox' }, [
                             h('input', {
                               class: 'skill-picker-search',
                               type: 'search',
@@ -6080,7 +6600,7 @@ const App = defineComponent({
                           ])
                         : undefined,
                       kbPickerOpen.value
-                        ? h('div', { class: 'kb-picker-menu' }, [
+                        ? h('div', { class: 'kb-picker-menu webui-popover-surface' }, [
                             h('div', { class: 'kb-picker-label' }, text('knowledgeSelectBase')),
                             h('div', { class: 'kb-picker-bases' }, [
                               knowledgeBases.value.length

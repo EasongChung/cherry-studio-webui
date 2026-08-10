@@ -570,10 +570,15 @@
   }
 
   .conversation-item:hover,
-  .conversation-item-selected,
   .conversation-item-wrap:focus-within .conversation-item {
     background: #eef2ff;
     border-color: #a5b4fc;
+  }
+
+  .conversation-item-selected {
+    background: #dbeafe;
+    border-color: #6366f1;
+    border-left: 3px solid #6366f1;
   }
 
   .conversation-actions {
@@ -887,7 +892,7 @@
     top: calc(100% + 6px);
     left: 0;
     min-width: 200px;
-    max-width: min(360px, calc(100vw - 32px));
+    max-width: min(675px, calc(100vw - 32px));
     display: grid;
     max-height: min(276px, 42dvh);
     overflow-y: auto;
@@ -964,7 +969,7 @@
     top: 50%;
     left: 50%;
     transform: translate(-50%, -50%);
-    width: min(360px, calc(100vw - 32px));
+    width: min(540px, calc(100vw - 32px));
     max-height: calc(100dvh - 32px);
     overflow-y: auto;
     display: grid;
@@ -2103,10 +2108,13 @@
     border-radius: 8px;
   }
 
-  /* Assistant uses the full ~800px reading column (stretch fills the row up to the cap)
-     instead of shrinking to the content width; user stays slightly narrower and right-aligned. */
+  /* Assistant fills the ~800px reading column: `stretch` makes the bubble take the
+     whole row up to the cap, so short and long turns share one left AND right edge.
+     Do NOT switch this to `flex-start` — that shrinks the bubble to its content width
+     and the 800px cap stops having any visible effect (regressed once in a4f3e3c9e3).
+     User bubbles stay narrower and right-aligned. */
   .assistant-message {
-    align-self: flex-start;
+    align-self: stretch;
     max-width: min(800px, 100%);
   }
 
@@ -2353,6 +2361,26 @@
   .markdown-content {
     overflow-wrap: anywhere;
     overflow-x: auto;
+  }
+
+  /* Read-aloud sentence spans: hover affordance only while that message is being
+     read aloud — a bare (non-reading) message shows no selection affordance. */
+  .speech-sentence {
+    border-radius: 3px;
+    transition: background-color 160ms ease, box-shadow 160ms ease;
+  }
+
+  .markdown-content[data-reading] .speech-sentence {
+    cursor: pointer;
+  }
+
+  .markdown-content[data-reading] .speech-sentence:hover {
+    background: rgb(99 102 241 / 10%);
+  }
+
+  .speech-sentence-active {
+    background: rgb(99 102 241 / 16%);
+    box-shadow: 0 0 0 1px rgb(99 102 241 / 30%);
   }
 
   .markdown-content > :first-child {
@@ -2769,6 +2797,98 @@
     min-width: 0;
   }
 
+  /* One run of consecutive reasoning/tool blocks between two prose segments. */
+  .process-segment {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    min-width: 0;
+    margin-bottom: 8px;
+  }
+
+  .process-segment:last-child {
+    margin-bottom: 0;
+  }
+
+  /* Top elapsed-time row for a streaming turn — mirrors the desktop ActiveProcessHeader
+     summary ("处理中 · 1分23秒"). Spacing comes from below so it sits on the content. */
+  .live-process-elapsed-row {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+    min-width: 0;
+    margin-bottom: 8px;
+    color: #6b7280;
+    font-size: 13px;
+    line-height: 1.45;
+  }
+
+  .live-process-summary {
+    overflow: hidden;
+    font-weight: 600;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  /* Live status row for a streaming turn — mirrors the desktop live tool group.
+     It sits at the very bottom line of the reply, so spacing comes from the top. */
+  .live-process-header {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+    min-width: 0;
+    margin-top: 8px;
+    color: #6b7280;
+    font-size: 13px;
+    line-height: 1.45;
+  }
+
+  .live-process-task {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .live-process-elapsed {
+    flex: 0 0 auto;
+    color: #9ca3af;
+    white-space: nowrap;
+  }
+
+  .live-process-elapsed::before {
+    margin-right: 6px;
+    content: '·';
+  }
+
+  .live-process-dots {
+    display: inline-flex;
+    flex: 0 0 auto;
+    gap: 3px;
+    align-items: center;
+  }
+
+  .live-process-dots i {
+    width: 4px;
+    height: 4px;
+    background: #9ca3af;
+    border-radius: 999px;
+    animation: live-process-dot 1.2s ease-in-out infinite;
+  }
+
+  .live-process-dots i:nth-child(2) {
+    animation-delay: 0.15s;
+  }
+
+  .live-process-dots i:nth-child(3) {
+    animation-delay: 0.3s;
+  }
+
+  @keyframes live-process-dot {
+    0%,
+    100% { opacity: 0.3; }
+    50% { opacity: 1; }
+  }
+
   .process-item-indicator {
     width: 7px;
     height: 7px;
@@ -2784,6 +2904,22 @@
     background: #f9fafb;
     border-left: 2px solid #cbd5e1;
     border-radius: 4px;
+  }
+
+  /* Inline prose spoken during the process (between tool calls), lighter than the final answer. */
+  .process-narration {
+    margin: 0 0 8px;
+    color: #4b5563;
+    font-size: 13px;
+    line-height: 1.55;
+  }
+
+  .process-narration > :first-child {
+    margin-top: 0;
+  }
+
+  .process-narration > :last-child {
+    margin-bottom: 0;
   }
 
   .process-history .reasoning-block,
@@ -2836,11 +2972,11 @@
     display: flex;
     gap: 8px;
     align-items: center;
-    min-height: 36px;
-    padding: 0 10px;
+    min-height: 34px;
+    padding: 0 12px;
     cursor: pointer;
     list-style: none;
-    background: #f9fafb;
+    background: #f3f4f6;
   }
 
   .tool-call-group summary::-webkit-details-marker {
@@ -2866,33 +3002,51 @@
     color: #374151;
   }
 
-  .tool-call-group > .tool-call {
-    margin: 0;
+  .tool-call-group-body {
+    padding: 6px;
+  }
+
+  .tool-call-group-body .tool-call {
+    margin: 0 0 6px;
     border: none;
-    border-top: 1px solid #e5e7eb;
     border-radius: 0;
   }
 
+  .tool-call-group-body .tool-call:last-child {
+    margin-bottom: 0;
+  }
+
   .tool-call {
-    margin: 0 0 10px;
+    margin: 0 0 8px;
     color: #374151;
-    background: #f9fafb;
+    background: #f3f4f6;
     border: 1px solid #e5e7eb;
-    border-radius: 6px;
+    border-radius: 8px;
   }
 
   .tool-call summary {
     display: flex;
     gap: 8px;
     align-items: center;
-    min-height: 36px;
-    padding: 0 10px;
+    min-height: 34px;
+    padding: 0 12px;
     cursor: pointer;
     list-style: none;
   }
 
   .tool-call summary::-webkit-details-marker {
     display: none;
+  }
+
+  /* Compact emoji icon on the card's left edge, mirroring desktop tool cards. */
+  .tool-call-icon {
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 18px;
+    font-size: 14px;
+    line-height: 1;
   }
 
   .tool-state-indicator {
@@ -2973,11 +3127,26 @@
     white-space: nowrap;
   }
 
-  .tool-call-state {
-    margin-left: auto;
+  /* Sub-agent / task name surfaced from the tool input (secondary, truncating). */
+  .tool-call-task {
+    min-width: 0;
+    flex: 1 1 auto;
+    overflow: hidden;
     color: #6b7280;
     font-size: 12px;
-    text-transform: capitalize;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .tool-call-state {
+    margin-left: auto;
+    padding: 1px 8px;
+    color: #6b7280;
+    font-size: 11px;
+    font-weight: 500;
+    background: #e5e7eb;
+    border-radius: 999px;
+    white-space: nowrap;
   }
 
   .tool-call-body {
@@ -2987,13 +3156,19 @@
   .tool-call-data {
     max-height: 240px;
     margin: 0;
-    padding: 9px;
+    padding: 0;
     overflow: auto;
     color: #374151;
     font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-    white-space: pre-wrap;
     background: #ffffff;
     border: 1px solid #e5e7eb;
+    border-radius: 4px;
+  }
+
+  .tool-call-data pre {
+    margin: 0;
+    padding: 9px;
+    border: 0;
     border-radius: 4px;
   }
 
@@ -4239,7 +4414,7 @@
     z-index: 6;
     right: 8px;
     bottom: calc(100% + 8px);
-    width: clamp(220px, 32%, 300px);
+    width: clamp(360px, 55%, 675px);
     display: grid;
     max-height: min(276px, 42dvh);
     overflow-y: auto;
@@ -4857,10 +5032,15 @@
       border-color: #475569;
     }
 
-    .conversation-item:hover,
-    .conversation-item-selected {
+    .conversation-item:hover {
       background: #263b5b;
       border-color: #60a5fa;
+    }
+
+    .conversation-item-selected {
+      background: #1e3a5f;
+      border-color: #7dd3fc;
+      border-left: 3px solid #60a5fa;
     }
 
     .conversation-title,
@@ -5247,6 +5427,23 @@
     border-left-color: #475569;
   }
 
+  :root[data-webui-theme='dark'] .process-narration {
+    color: #9ca3af;
+  }
+
+  :root[data-webui-theme='dark'] .live-process-elapsed-row,
+  :root[data-webui-theme='dark'] .live-process-header {
+    color: #94a3b8;
+  }
+
+  :root[data-webui-theme='dark'] .live-process-elapsed {
+    color: #64748b;
+  }
+
+  :root[data-webui-theme='dark'] .live-process-dots i {
+    background: #64748b;
+  }
+
   :root[data-webui-theme='dark'] .tool-call-group-summary {
     color: #e5e7eb;
   }
@@ -5281,6 +5478,15 @@
     background: #1e293b;
   }
 
+  :root[data-webui-theme='dark'] .markdown-content[data-reading] .speech-sentence:hover {
+    background: rgb(96 165 250 / 12%);
+  }
+
+  :root[data-webui-theme='dark'] .speech-sentence-active {
+    background: rgb(96 165 250 / 22%);
+    box-shadow: 0 0 0 1px rgb(96 165 250 / 40%);
+  }
+
   :root[data-webui-theme='dark'] .message-attachment-link {
     color: #93c5fd;
     text-decoration-color: rgb(147 197 253 / 40%);
@@ -5292,7 +5498,6 @@
   }
 
   :root[data-webui-theme='dark'] .conversation-item:hover,
-  :root[data-webui-theme='dark'] .conversation-item-selected,
   :root[data-webui-theme='dark'] .conversation-item-wrap:focus-within .conversation-item,
   :root[data-webui-theme='dark'] .conversation-action-button:hover,
   :root[data-webui-theme='dark'] .conversation-action-button:focus-visible,
@@ -5320,6 +5525,12 @@
   :root[data-webui-theme='dark'] .slash-command-option:hover,
   :root[data-webui-theme='dark'] .theme-toggle-button:hover {
     background: #334155;
+  }
+
+  :root[data-webui-theme='dark'] .conversation-item-selected {
+    background: #1e3a5f;
+    border-color: #7dd3fc;
+    border-left: 3px solid #60a5fa;
   }
 
   :root[data-webui-theme='dark'] .skill-picker-option,
@@ -5843,7 +6054,6 @@
   }
 
   :root[data-webui-theme='light'] .conversation-item:hover,
-  :root[data-webui-theme='light'] .conversation-item-selected,
   :root[data-webui-theme='light'] .conversation-group-toggle:hover,
   :root[data-webui-theme='light'] .conversation-group-toggle:focus-visible,
   :root[data-webui-theme='light'] .conversation-group-create:hover,

@@ -130,6 +130,18 @@ export type WebUiCompactionAnchor = {
   readonly postTokens?: number
 }
 
+/**
+ * One ordered content block of an assistant turn, mirroring the desktop message
+ * part layout: reasoning, prose and tool calls are rendered IN LINE in the order
+ * they streamed, rather than folded into separate pools. Only the final prose
+ * tail is the "answer"; everything before it is process history that collapses
+ * once the turn completes.
+ */
+export type WebUiContentBlock =
+  | { readonly kind: 'reasoning'; readonly id: string; readonly content: string; readonly isStreaming?: boolean }
+  | { readonly kind: 'text'; readonly id: string; readonly content: string; readonly isStreaming?: boolean }
+  | { readonly kind: 'tool'; readonly id: string; readonly tool: WebUiToolCallSnapshot }
+
 export type WebUiMessageSnapshot = {
   readonly id: string
   readonly conversationId: string
@@ -139,6 +151,8 @@ export type WebUiMessageSnapshot = {
   readonly toolCalls?: readonly WebUiToolCallSnapshot[]
   /** Reasoning and tool calls grouped in their original message-part order. */
   readonly processGroups?: readonly WebUiProcessGroup[]
+  /** Every reasoning/text/tool part in streaming order — drives the live interleaved layout. */
+  readonly contentBlocks?: readonly WebUiContentBlock[]
   /** Context compactions that happened during this turn, in part order. */
   readonly compactionAnchors?: readonly WebUiCompactionAnchor[]
   readonly agentStatusEvents?: readonly WebUiAgentStatusEvent[]
@@ -147,6 +161,13 @@ export type WebUiMessageSnapshot = {
   readonly modelId?: string
   readonly status: 'pending' | 'success' | 'error' | 'paused'
   readonly processingTimeMs?: number
+  /**
+   * Wall-clock duration of the whole turn (row `updatedAt - createdAt`), covering
+   * every stream round plus the tool execution and approval waits between them.
+   * `processingTimeMs` only measures a single LLM stream, so it under-reports the
+   * time the user actually waited on multi-round turns.
+   */
+  readonly totalElapsedMs?: number
   /** Real token usage reported by the desktop — absent when the row has no stats. */
   readonly tokenStats?: WebUiMessageTokenStats
   readonly createdAt: string

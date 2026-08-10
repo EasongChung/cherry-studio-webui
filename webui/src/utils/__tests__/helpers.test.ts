@@ -12,6 +12,7 @@ import {
   resolveConversationWorkspaceType,
   resolveWorkspaceSeedFromConversation,
   settleProcessGroups,
+  splitProcessElapsed,
   toAgentStatusEvents,
   toConversationSummary,
   toDisplayText,
@@ -356,5 +357,23 @@ describe('formatDuration', () => {
 
   it('clamps negative durations', () => {
     expect(formatDuration(-100)).toBe('0.1s')
+  })
+})
+
+describe('splitProcessElapsed', () => {
+  it('splits sub-minute durations into seconds only', () => {
+    expect(splitProcessElapsed(0)).toEqual({ minutes: 0, seconds: 0 })
+    expect(splitProcessElapsed(500)).toEqual({ minutes: 0, seconds: 1 })
+    expect(splitProcessElapsed(59_499)).toEqual({ minutes: 0, seconds: 59 })
+  })
+
+  it('splits minute-plus durations into minutes and seconds', () => {
+    expect(splitProcessElapsed(60_000)).toEqual({ minutes: 1, seconds: 0 })
+    expect(splitProcessElapsed(60_500)).toEqual({ minutes: 1, seconds: 1 })
+    expect(splitProcessElapsed(2 * 60_000 + 15_000)).toEqual({ minutes: 2, seconds: 15 })
+  })
+
+  it('clamps negative durations to zero', () => {
+    expect(splitProcessElapsed(-100)).toEqual({ minutes: 0, seconds: 0 })
   })
 })
