@@ -186,6 +186,7 @@ const App = defineComponent({
     const chatStore = useWebUiChatStore()
     const { activeRunConversationId, conversations, messages, selectedConversationId } = storeToRefs(chatStore)
     const bridgeState = ref<'checking' | 'connected' | 'offline'>('checking')
+    const bridgeRetryCount = ref(0)
     const language = ref(normalizeLanguage(navigator.language))
     const languageOverride = ref(false)
     const languagePickerOpen = ref(false)
@@ -2719,14 +2720,17 @@ const App = defineComponent({
       try {
         const health = await httpClient.getJson<WebUiHealthResponse>('/api/health')
         if (!languageOverride.value) language.value = normalizeLanguage(health.language)
+        bridgeRetryCount.value = 0
         bridgeState.value = health.ok ? 'connected' : 'offline'
         bridgeDetail.value = health.ok ? text('connected') : text('disconnected')
         appVersion.value = health.appVersion ?? ''
         serviceStartedAt.value = new Date(health.startedAt).toLocaleString()
         sseClientCount.value = String(health.sseClients)
       } catch (error) {
+        bridgeRetryCount.value++
         bridgeState.value = 'offline'
-        bridgeDetail.value = localizedErrorMessage(error)
+        bridgeDetail.value =
+          bridgeRetryCount.value > 1 ? `${text('disconnected')} (${bridgeRetryCount.value})` : `${text('disconnected')}`
         appVersion.value = ''
         serviceStartedAt.value = text('unavailable')
         sseClientCount.value = '0'
@@ -5015,6 +5019,10 @@ const App = defineComponent({
       // SSE reconnected after a disconnect (mobile lock screen, background tab, network drop).
       // The `done`/`sync` events broadcast during the offline gap are lost, so the message
       // stays `pending` in memory. Verify the DB state after a short debounce.
+      if (bridgeState.value === 'offline') {
+        bridgeState.value = 'connected'
+        bridgeDetail.value = text('connected')
+      }
       if (reconnectVerifyTimer !== undefined) window.clearTimeout(reconnectVerifyTimer)
       reconnectVerifyTimer = window.setTimeout(() => {
         reconnectVerifyTimer = undefined
