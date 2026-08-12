@@ -413,6 +413,7 @@ const App = defineComponent({
     let contextUsageTimer: number | undefined
     let syncTimer: number | undefined
     let streamRefreshTimer: number | undefined
+    let reconnectVerifyTimer: number | undefined
     let chunkFrame: number | undefined
     let latestMessageRequest = 0
     let statusPreviewOpenTimer: number | undefined
@@ -2848,8 +2849,79 @@ const App = defineComponent({
       incoming: readonly WebUiMessageSnapshot[]
     ): readonly WebUiMessageSnapshot[] => {
       const byId = new Map(current.map((message) => [message.id, message]))
-      for (const message of incoming) byId.set(message.id, message)
+      for (const message of incoming) {
+        const existing = byId.get(message.id)
+        if (!existing) {
+          byId.set(message.id, message)
+          continue
+        }
+        // Prefer the richer of two sides when one is a pending accumulation and the
+        // other is a pre-persistence placeholder (the DB only writes `parts` at the
+        // end of the stream).  A terminal row that carries content is authoritative
+        // and must not be overwritten by a stale pending snapshot (page-refresh cache).
+        if (
+          existing.status !== 'pending' &&
+          (existing.content.length > 0 || existing.reasoning !== undefined) &&
+          message.status === 'pending'
+        )
+          continue
+        if (
+          existing.status === 'pending' &&
+          message.status !== 'pending' &&
+          message.content.length === 0 &&
+          message.reasoning === undefined
+        )
+          continue
+        byId.set(message.id, message)
+      }
       return [...byId.values()].sort((left, right) => Date.parse(left.createdAt) - Date.parse(right.createdAt))
+    }
+
+    /** Save in-memory pending snapshots before the page unloads so a refresh
+     *  can recover the SSE accumulation the server has not yet persisted. */
+    const savePendingSnapshots = () => {
+      try {
+        const conversationId = selectedConversationId.value
+        if (!conversationId) return
+        const pending = messages.value.filter((m) => m.status === 'pending')
+        if (pending.length === 0) {
+          window.sessionStorage.removeItem(`webui-pending:${conversationId}`)
+          return
+        }
+        window.sessionStorage.setItem(`webui-pending:${conversationId}`, JSON.stringify(pending))
+      } catch {
+        /* cache is best-effort */
+      }
+    }
+
+    /** Restore any cached pending snapshots for the given conversation. */
+    const restoreCachedSnapshots = (conversationId: string): readonly WebUiMessageSnapshot[] => {
+      try {
+        const raw = window.sessionStorage.getItem(`webui-pending:${conversationId}`)
+        if (!raw) return []
+        return JSON.parse(raw) as WebUiMessageSnapshot[]
+      } catch {
+        return []
+      }
+    }
+
+    /** Desktop notification when a reply that ran ≥3 minutes finishes while the page is in the background. */
+    const notifyTaskComplete = (messageId?: string) => {
+      if (typeof window === 'undefined' || !('Notification' in window)) return
+      if (document.visibilityState === 'visible') return
+      // Only alert for genuinely long-running turns so short replies don't spam the user.
+      const message = messageId ? messages.value.find((m) => m.id === messageId) : undefined
+      const startedAt = message ? Date.parse(message.createdAt) : NaN
+      if (!Number.isFinite(startedAt) || Date.now() - startedAt < 180_000) return
+      if (Notification.permission === 'granted') {
+        new Notification(text('taskCompleteTitle'), { body: text('taskCompleteBody') })
+      } else if (Notification.permission === 'default') {
+        void Notification.requestPermission().then((permission) => {
+          if (permission === 'granted') {
+            new Notification(text('taskCompleteTitle'), { body: text('taskCompleteBody') })
+          }
+        })
+      }
     }
 
     const loadConversationMessages = async (conversationId: string, mode: 'replace' | 'refresh' = 'replace') => {
@@ -2867,7 +2939,10 @@ const App = defineComponent({
         if (requestId !== latestMessageRequest || selectedConversationId.value !== conversationId) return
 
         const latest = page.items.map(toMessageSnapshot).reverse()
-        messages.value = mode === 'replace' ? latest : mergeMessages(messages.value, latest)
+        messages.value =
+          mode === 'replace'
+            ? mergeMessages(latest, restoreCachedSnapshots(conversationId))
+            : mergeMessages(messages.value, latest)
         if (mode === 'replace') olderMessagesCursor.value = page.nextCursor
         messageLoadState.value = 'ready'
         messageLoadMessage.value = messages.value.length ? '' : text('emptyConversation')
@@ -4904,6 +4979,7 @@ const App = defineComponent({
       if (pendingSubmittedTurnCount.value === 0 && conversationId === activeRunConversationId.value) {
         activeRunConversationId.value = undefined
       }
+      notifyTaskComplete(data?.messageId)
       if (conversationId && conversationId === selectedConversationId.value) {
         // Capture before refresh: only pin if the user was still near the bottom.
         const wasNearBottom = !showScrollToBottom.value
@@ -4935,9 +5011,25 @@ const App = defineComponent({
       }
     })
 
+    const unsubscribeReady = sseClient.subscribe('ready', () => {
+      // SSE reconnected after a disconnect (mobile lock screen, background tab, network drop).
+      // The `done`/`sync` events broadcast during the offline gap are lost, so the message
+      // stays `pending` in memory. Verify the DB state after a short debounce.
+      if (reconnectVerifyTimer !== undefined) window.clearTimeout(reconnectVerifyTimer)
+      reconnectVerifyTimer = window.setTimeout(() => {
+        reconnectVerifyTimer = undefined
+        const conversationId = selectedConversationId.value
+        if (!conversationId) return
+        if (messages.value.some((m) => m.status === 'pending')) {
+          void loadConversationMessages(conversationId, 'refresh')
+        }
+      }, 3000)
+    })
+
     onMounted(() => {
       applyThemeMode()
       document.addEventListener('pointerdown', handlePopoverOutsidePointerDown)
+      window.addEventListener('beforeunload', savePendingSnapshots)
       processElapsedTimer = window.setInterval(() => {
         if (isCurrentlyStreaming.value) processElapsedTick.value += 1
       }, 1000)
@@ -4995,6 +5087,7 @@ const App = defineComponent({
       clearStatusPreviewTimers()
       saveComposerDraft()
       document.removeEventListener('pointerdown', handlePopoverOutsidePointerDown)
+      window.removeEventListener('beforeunload', savePendingSnapshots)
       if (bottomWheelSettleTimer !== undefined) window.clearTimeout(bottomWheelSettleTimer)
       if (workspaceFileSearchTimer !== undefined) window.clearTimeout(workspaceFileSearchTimer)
       releaseWorkspacePreview()
@@ -5003,6 +5096,7 @@ const App = defineComponent({
       if (processElapsedTimer !== undefined) window.clearInterval(processElapsedTimer)
       if (syncTimer) window.clearTimeout(syncTimer)
       if (streamRefreshTimer !== undefined) window.clearTimeout(streamRefreshTimer)
+      if (reconnectVerifyTimer !== undefined) window.clearTimeout(reconnectVerifyTimer)
       if (chunkFrame !== undefined) window.cancelAnimationFrame(chunkFrame)
       clearPendingStreamChunks()
       sealedStreamMessageIds.clear()
@@ -5011,6 +5105,7 @@ const App = defineComponent({
       unsubscribeChunk()
       unsubscribeDone()
       unsubscribeError()
+      unsubscribeReady()
       sseClient.close()
       delete document.documentElement.dataset.webuiTheme
       compactHeaderMql.removeEventListener('change', onCompactHeaderChange)
