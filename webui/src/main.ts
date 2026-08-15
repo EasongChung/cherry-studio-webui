@@ -2720,7 +2720,6 @@ const App = defineComponent({
         : []),
       {
         label: text('serviceStarted'),
-        label: text('serviceStarted'),
         value: serviceStartedAt.value
       },
       {
