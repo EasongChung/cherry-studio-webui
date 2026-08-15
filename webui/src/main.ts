@@ -187,6 +187,9 @@ const App = defineComponent({
     const { activeRunConversationId, conversations, messages, selectedConversationId } = storeToRefs(chatStore)
     const bridgeState = ref<'checking' | 'connected' | 'offline'>('checking')
     const bridgeRetryCount = ref(0)
+    const apiRetryState = ref<{ status: string; attempt?: number; maxRetries?: number; retryDelayMs?: number }>({
+      status: 'idle'
+    })
     const language = ref(normalizeLanguage(navigator.language))
     const languageOverride = ref(false)
     const languagePickerOpen = ref(false)
@@ -365,6 +368,9 @@ const App = defineComponent({
     const olderConversationsLoading = ref(false)
     /** Workdir groups whose conversations are fully expanded (show-more opened); collapsed groups cap at the default count. */
     const expandedConversationGroupIds = ref(new Set<string>())
+    /** Tracks whether the initial conversation load has set the collapse/expand state,
+     *  so subsequent sync-refreshes preserve the user's manual workdir-group layout. */
+    const conversationsInitiallyLoaded = ref(false)
     const showScrollToBottom = ref(false)
     const composerHeight = ref(composerDefaultHeight)
     const deleteMessageId = ref<string>()
@@ -1063,6 +1069,14 @@ const App = defineComponent({
             ...(updatedInput !== undefined ? { updatedInput } : {})
           }
         )
+        // Reset submitting state so the approval panel can reflect the result;
+        // subsequent SSE chunk or sync refresh will close the panel.
+        setApprovalSubmitting(message.id, tool.id, false)
+        // Force-refresh messages to clear the approval-requested state if the
+        // server-side stream chunk hasn't arrived yet.
+        if (conversationId) {
+          void loadConversationMessages(conversationId, 'refresh')
+        }
       } catch (error) {
         setApprovalSubmitting(message.id, tool.id, false)
         setApprovalError(message.id, tool.id, localizedErrorMessage(error) || text('approvalFailed'))
@@ -2696,7 +2710,16 @@ const App = defineComponent({
         label: text('runtime'),
         value: bridgeDetail.value
       },
+      ...(apiRetryState.value.status === 'retrying'
+        ? [
+            {
+              label: text('apiStatus'),
+              value: `${text('apiReconnecting')} (${apiRetryState.value.attempt ?? 0}/${apiRetryState.value.maxRetries ?? 3})`
+            }
+          ]
+        : []),
       {
+        label: text('serviceStarted'),
         label: text('serviceStarted'),
         value: serviceStartedAt.value
       },
@@ -2779,10 +2802,16 @@ const App = defineComponent({
         // Show only the newest session's workdir group (its first `conversationGroupDefaultVisibleCount`
         // items) by default; collapse every other workdir group to its header. Not persisted, so a
         // later load re-derives the layout from the then-newest session.
-        const latestGroupKey = latestConversation ? conversationGroupKey(latestConversation) : undefined
-        collapsedWorkdirGroupIds.value = new Set(
-          conversationGroups.value.filter((group) => group.id !== latestGroupKey).map((group) => group.id)
-        )
+        // Preserve user's manual workdir-group collapse state across sync-triggered reloads.
+        // Only auto-collapse groups (except the latest) on the very first load when no user
+        // state has been established yet, so subsequent sync-refreshes don't fight the user's layout.
+        if (!conversationsInitiallyLoaded.value) {
+          const latestGroupKey = latestConversation ? conversationGroupKey(latestConversation) : undefined
+          collapsedWorkdirGroupIds.value = new Set(
+            conversationGroups.value.filter((group) => group.id !== latestGroupKey).map((group) => group.id)
+          )
+          conversationsInitiallyLoaded.value = true
+        }
         if (!selectedConversationId.value && latestConversation) {
           // Auto-open the newest session without expanding its per-group show-more footer,
           // so a refreshed sidebar stays collapsed until the user explicitly expands it.
@@ -3135,6 +3164,18 @@ const App = defineComponent({
         })
         .catch(() => {
           if (selectedConversationId.value === conversationId) contextUsage.value = null
+        })
+      // WebUI desktop bridge: poll the API retry state for the active session
+      // so the status panel can show a "Retrying…" indicator when the provider is backing off.
+      void httpClient
+        .getJson<{ retry: { status: string; attempt?: number; maxRetries?: number; retryDelayMs?: number } }>(
+          `/api/webui/api-retry/${encodeURIComponent(conversationId)}`
+        )
+        .then((response) => {
+          if (selectedConversationId.value === conversationId) apiRetryState.value = response.retry
+        })
+        .catch(() => {
+          if (selectedConversationId.value === conversationId) apiRetryState.value = { status: 'idle' }
         })
     }
 
@@ -4604,15 +4645,25 @@ const App = defineComponent({
       }
     }
 
-    /** Persist updated pinned tool order back to the desktop preference. */
+    /** Persist updated pinned tool order back to the desktop preference.
+     * Writes to both chat and agent sets — the WebUI has a single composer
+     * so the two sets are kept in sync here. */
     const savePinnedTools = async (pinnedIds: readonly string[]) => {
       chatInputPinnedTools.value = pinnedIds
+      agentInputPinnedTools.value = pinnedIds
       try {
-        await httpClient.putJson('/api/webui/preferences', { chatInputPinnedTools: pinnedIds })
+        await httpClient.putJson('/api/webui/preferences', {
+          chatInputPinnedTools: pinnedIds,
+          agentInputPinnedTools: pinnedIds
+        })
       } catch {
         // silently ignore — the local state is already updated for the session.
       }
     }
+
+    /** Returns true when a tool id is pinned in either the chat or agent toolbar set. */
+    const isPinnedTool = (toolId: string) =>
+      chatInputPinnedTools.value.includes(toolId) || agentInputPinnedTools.value.includes(toolId)
 
     /**
      * One row of the composer tool launcher, mirroring the desktop
@@ -4825,20 +4876,31 @@ const App = defineComponent({
           { id: 'compact', labelKey: 'compact' },
           { id: 'fastMode', labelKey: 'fastMode' }
         ]
-        return pinableTools.map((tool) => ({
-          id: `pin:${tool.id}`,
-          label: text(tool.labelKey),
-          suffix: chatInputPinnedTools.value.includes(tool.id) ? text('quickPanelPinned') : undefined,
-          section: 'resources' as const,
-          action: () => {
-            const current = chatInputPinnedTools.value
-            if (current.includes(tool.id)) {
-              void savePinnedTools(current.filter((id) => id !== tool.id))
-            } else {
-              void savePinnedTools([...current, tool.id])
+        return pinableTools.map((tool) => {
+          const pinnedInChat = chatInputPinnedTools.value.includes(tool.id)
+          const pinnedInAgent = agentInputPinnedTools.value.includes(tool.id)
+          const pinnedText =
+            pinnedInChat && pinnedInAgent
+              ? text('quickPanelPinned')
+              : pinnedInChat
+                ? text('quickPanelPinned')
+                : pinnedInAgent
+                  ? text('quickPanelPinned')
+                  : undefined
+          return {
+            id: `pin:${tool.id}`,
+            label: text(tool.labelKey),
+            suffix: pinnedText,
+            section: 'resources' as const,
+            action: () => {
+              // Toggle in both sets to keep them in sync.
+              const nextChat = chatInputPinnedTools.value.includes(tool.id)
+                ? chatInputPinnedTools.value.filter((id) => id !== tool.id)
+                : [...chatInputPinnedTools.value, tool.id]
+              void savePinnedTools(nextChat)
             }
           }
-        }))
+        })
       }
 
       return []
@@ -5028,9 +5090,29 @@ const App = defineComponent({
         reconnectVerifyTimer = undefined
         const conversationId = selectedConversationId.value
         if (!conversationId) return
-        if (messages.value.some((m) => m.status === 'pending')) {
-          void loadConversationMessages(conversationId, 'refresh')
-        }
+        // First try to recover cached stream chunks from the server so in-flight
+        // process info (contentBlocks, processGroups, toolCalls) can be restored
+        // before the DB refresh clears the pending message rows.
+        void httpClient
+          .getJson<{ chunks: Array<{ conversationId: string; messageId: string; chunk: WebUiChunkPayload['chunk'] }> }>(
+            `/api/webui/stream-cache/${encodeURIComponent(conversationId)}`
+          )
+          .then((response) => {
+            if (!response.chunks || response.chunks.length === 0) return
+            for (const entry of response.chunks) {
+              if (entry.conversationId === conversationId) {
+                queueStreamChunk({ conversationId, messageId: entry.messageId, chunk: entry.chunk })
+              }
+            }
+          })
+          .catch(() => {
+            /* cache empty or unavailable — fall through to the refresh below */
+          })
+          .finally(() => {
+            if (messages.value.some((m) => m.status === 'pending')) {
+              void loadConversationMessages(conversationId, 'refresh')
+            }
+          })
       }, 3000)
     })
 
@@ -6340,7 +6422,7 @@ const App = defineComponent({
                             renderComposerToolIcon('permission')
                           ),
                           // Conditionally rendered tools: only show when pinned in the quick panel.
-                          chatInputPinnedTools.value.includes('skill')
+                          isPinnedTool('skill')
                             ? h(
                                 'button',
                                 {
@@ -6367,7 +6449,7 @@ const App = defineComponent({
                                 renderComposerToolIcon('skill')
                               )
                             : undefined,
-                          chatInputPinnedTools.value.includes('knowledge')
+                          isPinnedTool('knowledge')
                             ? h(
                                 'button',
                                 {
@@ -6394,7 +6476,7 @@ const App = defineComponent({
                                 renderComposerToolIcon('knowledge')
                               )
                             : undefined,
-                          chatInputPinnedTools.value.includes('compact')
+                          isPinnedTool('compact')
                             ? h(
                                 'button',
                                 {
@@ -6417,7 +6499,7 @@ const App = defineComponent({
                                 renderComposerToolIcon('compact')
                               )
                             : undefined,
-                          chatInputPinnedTools.value.includes('fastMode')
+                          isPinnedTool('fastMode')
                             ? h(
                                 'button',
                                 {
