@@ -1,7 +1,6 @@
 import { application } from '@application'
 import { mcpServerService } from '@data/services/McpServerService'
 import { loggerService } from '@logger'
-import { redactServerKey } from '@main/ai/mcp/McpRuntimeService'
 import { BaseService, DependsOn, Emitter, type Event, Injectable, Phase, ServicePhase } from '@main/core/lifecycle'
 import { withSpanFunc } from '@mcp-trace/trace-core'
 import type { Tool as SDKTool } from '@modelcontextprotocol/sdk/types'
@@ -9,6 +8,7 @@ import { isMcpToolDisabledBySource } from '@shared/ai/tools/mcpSourcePolicy'
 import type { SharedCacheKey } from '@shared/data/cache/cacheSchemas'
 import type { McpServer } from '@shared/data/types/mcpServer'
 import type { McpPrompt, McpResource, McpTool } from '@shared/types/mcp'
+import { redactServerKey } from '@shared/utils/redaction'
 import * as z from 'zod'
 
 import { buildMcpToolWireId } from './mcpToolId'
@@ -190,7 +190,18 @@ export class McpCatalogService extends BaseService {
 
   private async listToolsImpl(server: McpServer): Promise<McpTool[]> {
     try {
-      const { tools } = await application.get('McpRuntimeService').withClient(server.id, (client) => client.listTools())
+      const { tools } = await application.get('McpRuntimeService').withClient(server.id, async (client) => {
+        // A server that publishes only prompts or resources answers `tools/list` with -32601, which
+        // used to surface as "start failed" and made it impossible to enable at all.
+        if (!client.getServerCapabilities()?.tools) {
+          logger.debug('Server does not declare tools capability, skipping list', {
+            serverId: server.id,
+            serverName: server.name
+          })
+          return { tools: [] as SDKTool[] }
+        }
+        return client.listTools()
+      })
       return tools.map((tool: SDKTool) => {
         const serverTool: McpTool = {
           ...tool,
