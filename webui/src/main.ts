@@ -417,6 +417,7 @@ const App = defineComponent({
     /** Assistant turns that finished streaming — ignore late text/reasoning deltas (prevents duplicate body after long thinking). */
     const sealedStreamMessageIds = new Set<string>()
     let healthTimer: number | undefined
+    let apiRetryTimer: number | undefined
     let contextUsageTimer: number | undefined
     let syncTimer: number | undefined
     let streamRefreshTimer: number | undefined
@@ -4970,6 +4971,24 @@ const App = defineComponent({
       })
       sseClient.connect()
       if (!healthTimer) healthTimer = window.setInterval(() => void refreshHealth(), 15_000)
+      // Poll the API retry state every 5 s so the header can show a
+      // "Reconnecting…" indicator even when the status panel is closed.
+      if (!apiRetryTimer) {
+        apiRetryTimer = window.setInterval(() => {
+          const conversationId = selectedConversationId.value
+          if (!conversationId) return
+          void httpClient
+            .getJson<{ retry: { status: string; attempt?: number; maxRetries?: number } }>(
+              `/api/webui/api-retry/${encodeURIComponent(conversationId)}`
+            )
+            .then((response) => {
+              if (selectedConversationId.value === conversationId) apiRetryState.value = response.retry
+            })
+            .catch(() => {
+              if (selectedConversationId.value === conversationId) apiRetryState.value = { status: 'idle' }
+            })
+        }, 5000)
+      }
     }
 
     const applyThemeMode = () => {
@@ -5089,29 +5108,28 @@ const App = defineComponent({
         reconnectVerifyTimer = undefined
         const conversationId = selectedConversationId.value
         if (!conversationId) return
-        // First try to recover cached stream chunks from the server so in-flight
-        // process info (contentBlocks, processGroups, toolCalls) can be restored
-        // before the DB refresh clears the pending message rows.
-        void httpClient
-          .getJson<{ chunks: Array<{ conversationId: string; messageId: string; chunk: WebUiChunkPayload['chunk'] }> }>(
-            `/api/webui/stream-cache/${encodeURIComponent(conversationId)}`
-          )
-          .then((response) => {
-            if (!response.chunks || response.chunks.length === 0) return
-            for (const entry of response.chunks) {
-              if (entry.conversationId === conversationId) {
-                queueStreamChunk({ conversationId, messageId: entry.messageId, chunk: entry.chunk })
-              }
-            }
+        if (messages.value.some((m) => m.status === 'pending')) {
+          // Refresh the DB state first so the message rows are authoritative,
+          // then replay cached stream chunks on top to restore in-flight
+          // process info (contentBlocks, processGroups, toolCalls).
+          void loadConversationMessages(conversationId, 'refresh').finally(() => {
+            void httpClient
+              .getJson<{
+                chunks: Array<{ conversationId: string; messageId: string; chunk: WebUiChunkPayload['chunk'] }>
+              }>(`/api/webui/stream-cache/${encodeURIComponent(conversationId)}`)
+              .then((response) => {
+                if (!response.chunks || response.chunks.length === 0) return
+                for (const entry of response.chunks) {
+                  if (entry.conversationId === conversationId) {
+                    queueStreamChunk({ conversationId, messageId: entry.messageId, chunk: entry.chunk })
+                  }
+                }
+              })
+              .catch(() => {
+                /* cache empty or unavailable */
+              })
           })
-          .catch(() => {
-            /* cache empty or unavailable — fall through to the refresh below */
-          })
-          .finally(() => {
-            if (messages.value.some((m) => m.status === 'pending')) {
-              void loadConversationMessages(conversationId, 'refresh')
-            }
-          })
+        }
       }, 3000)
     })
 
@@ -5181,6 +5199,7 @@ const App = defineComponent({
       if (workspaceFileSearchTimer !== undefined) window.clearTimeout(workspaceFileSearchTimer)
       releaseWorkspacePreview()
       if (healthTimer) window.clearInterval(healthTimer)
+      if (apiRetryTimer) window.clearInterval(apiRetryTimer)
       if (contextUsageTimer) window.clearInterval(contextUsageTimer)
       if (processElapsedTimer !== undefined) window.clearInterval(processElapsedTimer)
       if (syncTimer) window.clearTimeout(syncTimer)
@@ -5912,6 +5931,17 @@ const App = defineComponent({
                               title: submitError.value
                             },
                             ` · ${submitError.value}`
+                          )
+                        : undefined,
+                      apiRetryState.value.status === 'retrying'
+                        ? h(
+                            'span',
+                            {
+                              class: 'chat-header-status-alert chat-header-status-reconnecting',
+                              role: 'status',
+                              title: `${text('apiReconnecting')} (${apiRetryState.value.attempt ?? 0}/${apiRetryState.value.maxRetries ?? 3})`
+                            },
+                            ` · ${text('apiReconnecting')}`
                           )
                         : undefined,
                       conversationLoadState.value === 'loading' || messageLoadState.value === 'loading'

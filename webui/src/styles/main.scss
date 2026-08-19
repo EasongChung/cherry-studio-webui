@@ -822,8 +822,16 @@
     white-space: nowrap;
   }
 
+  .chat-header-status-reconnecting {
+    color: #b45309 !important;
+  }
+
   :root[data-webui-theme='dark'] .chat-header-status-alert {
     color: #fca5a5;
+  }
+
+  :root[data-webui-theme='dark'] .chat-header-status-reconnecting {
+    color: #fbbf24 !important;
   }
 
   .chat-header h2 {
