@@ -4921,8 +4921,8 @@ const App = defineComponent({
       })
       sseClient.connect()
       if (!healthTimer) healthTimer = window.setInterval(() => void refreshHealth(), 15_000)
-      // Poll the API retry state every 5 s so the header can show a
-      // "Reconnecting…" indicator even when the status panel is closed.
+      // Poll the API retry state every 1 s so the header can show a
+      // "Reconnecting…" indicator with minimal lag when the provider is backing off.
       if (!apiRetryTimer) {
         apiRetryTimer = window.setInterval(() => {
           const conversationId = selectedConversationId.value
@@ -4937,7 +4937,7 @@ const App = defineComponent({
             .catch(() => {
               if (selectedConversationId.value === conversationId) apiRetryState.value = { status: 'idle' }
             })
-        }, 5000)
+        }, 1000)
       }
     }
 
