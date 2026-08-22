@@ -30,7 +30,7 @@ import { aiStreamAdmissionReasons } from '@shared/ai/transport'
 import { isDataApiNotFoundError } from '@shared/data/api/errors'
 import type { CherryMessagePart } from '@shared/data/types/message'
 import type { MessageRuntimeSpan, MessageRuntimeTiming } from '@shared/data/types/message'
-import type { UniqueModelId } from '@shared/data/types/model'
+import type { ServiceTierSelection, UniqueModelId } from '@shared/data/types/model'
 import type { ReasoningEffortOption } from '@shared/types/aiSdk'
 import type { SerializedError } from '@shared/types/error'
 import type { UIMessageChunk } from 'ai'
@@ -319,7 +319,7 @@ export class AiStreamManager extends BaseService {
   private readonly _onConversationCompleted = new Emitter<ConversationCompletedEvent>()
   public readonly onConversationCompleted: Event<ConversationCompletedEvent> = this._onConversationCompleted.event
   private readonly activeStreams = new Map<string, ActiveStream>()
-  /** Serialises `prepareDispatch → send` per topic so concurrent `Ai_Stream_Open` can't race
+  /** Serialises `prepareDispatch → send` per topic so concurrent `ai.stream.open` requests can't race
    *  the `hasLiveStream` snapshot and orphan a PENDING placeholder row. */
   private readonly dispatchLock = new KeyedMutex()
   private readonly config: AiStreamManagerConfig
@@ -329,7 +329,12 @@ export class AiStreamManager extends BaseService {
    *  the agent runtime's `pendingTurns`; drained one continuation turn at a time. */
   private readonly pendingSteers = new Map<
     string,
-    Array<{ userMessageId: string; reasoningEffort?: ReasoningEffortOption; fastMode: boolean }>
+    Array<{
+      userMessageId: string
+      reasoningEffort?: ReasoningEffortOption
+      serviceTier?: ServiceTierSelection
+      fastMode: boolean
+    }>
   >()
   /** Topics whose steer continuation is mid-launch — dedups `scheduleNextChatTurn`, mirroring the
    *  agent runtime's explicit launch state. */
@@ -423,7 +428,7 @@ export class AiStreamManager extends BaseService {
   /**
    * Run `fn` under the per-topic dispatch lock. The sole accessor of `dispatchLock`,
    * so every dispatch entry point serialises through one place: `dispatch()` (the chat
-   * `Ai_Stream_Open` + approval-continue paths) and `startAgentSessionRun` (scheduler /
+   * `ai.stream.open` + approval-continue paths) and `startAgentSessionRun` (scheduler /
    * channel-inbound agent-session runs), which can't use `dispatch()` because it carries
    * extra listeners. Holding the same per-topic lock around their `hasLiveStream →
    * prepareDispatch → send` window stops two runs on one topic from both seeing "no live
@@ -1044,6 +1049,7 @@ export class AiStreamManager extends BaseService {
     topicId: string,
     userMessageId: string,
     reasoningEffort?: ReasoningEffortOption,
+    serviceTier?: ServiceTierSelection,
     fastMode?: boolean
   ): void {
     // The turn may have settled between `prepareDispatch` and here (the loop's terminal hooks don't
@@ -1057,7 +1063,7 @@ export class AiStreamManager extends BaseService {
     //   • aborted / error   → drop; the persisted user row stays for the user to resend.
     const status = this.activeStreams.get(topicId)?.status
     if (status && isLiveStatus(status)) {
-      this.appendPendingSteer(topicId, userMessageId, reasoningEffort, fastMode)
+      this.appendPendingSteer(topicId, userMessageId, reasoningEffort, serviceTier, fastMode)
       return
     }
     if (status === 'aborted' || status === 'error') {
@@ -1068,7 +1074,7 @@ export class AiStreamManager extends BaseService {
       })
       return
     }
-    this.appendPendingSteer(topicId, userMessageId, reasoningEffort, fastMode)
+    this.appendPendingSteer(topicId, userMessageId, reasoningEffort, serviceTier, fastMode)
     if (status !== 'awaiting-approval') this.scheduleNextChatTurn(topicId)
   }
 
@@ -1076,10 +1082,11 @@ export class AiStreamManager extends BaseService {
     topicId: string,
     userMessageId: string,
     reasoningEffort?: ReasoningEffortOption,
+    serviceTier?: ServiceTierSelection,
     fastMode?: boolean
   ): void {
     const queue = this.pendingSteers.get(topicId)
-    const item = { userMessageId, reasoningEffort, fastMode: fastMode === true }
+    const item = { userMessageId, reasoningEffort, serviceTier, fastMode: fastMode === true }
     if (queue) queue.push(item)
     else this.pendingSteers.set(topicId, [item])
   }
@@ -1574,12 +1581,13 @@ export class AiStreamManager extends BaseService {
     const carried = previous ? [...previous.listeners.values()].filter(isRendererListener) : []
     if (previous) this.evictStream(topicId)
 
-    const { userMessageId, reasoningEffort, fastMode } = pending
+    const { userMessageId, reasoningEffort, serviceTier, fastMode } = pending
     const req: MainDispatchRequest = {
       trigger: 'steer-continuation',
       topicId,
       userMessageId,
       reasoningEffort,
+      serviceTier,
       fastMode
     }
     try {
