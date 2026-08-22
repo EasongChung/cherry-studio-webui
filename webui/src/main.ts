@@ -2799,30 +2799,10 @@ const App = defineComponent({
         // Open WebUI / after refresh: land on the newest session when nothing is selected.
         // Guard the index access: noUncheckedIndexedAccess still types [0] as possibly undefined.
         const latestConversation = conversations.value[0]
-        // Show only the newest session's workdir group (its first `conversationGroupDefaultVisibleCount`
-        // items) by default; collapse every other workdir group to its header. Not persisted, so a
-        // later load re-derives the layout from the then-newest session.
-        // Preserve user's manual workdir-group collapse state across sync-triggered reloads.
-        // Only auto-collapse groups (except the latest) on the very first load when no user
-        // state has been established yet, so subsequent sync-refreshes don't fight the user's layout.
-        if (!conversationsInitiallyLoaded.value) {
-          const latestGroupKey = latestConversation ? conversationGroupKey(latestConversation) : undefined
-          collapsedWorkdirGroupIds.value = new Set(
-            conversationGroups.value.filter((group) => group.id !== latestGroupKey).map((group) => group.id)
-          )
-          conversationsInitiallyLoaded.value = true
-        }
         if (!selectedConversationId.value && latestConversation) {
           // Auto-open the newest session without expanding its per-group show-more footer,
           // so a refreshed sidebar stays collapsed until the user explicitly expands it.
           selectConversation(latestConversation.id, { reveal: false })
-        }
-        // Fill the sidebar until the viewport is full; groups beyond the default visible
-        // count stay collapsed behind their per-group "show more" footer button.
-        await nextTick()
-        const nav = conversationNav.value
-        if (olderConversationsCursor.value && nav && nav.scrollHeight <= nav.clientHeight + 8) {
-          void loadOlderConversations()
         }
       } catch (error) {
         conversations.value = []
@@ -2832,49 +2812,8 @@ const App = defineComponent({
       }
     }
 
-    const loadOlderConversations = async () => {
-      const cursor = olderConversationsCursor.value
-      if (!cursor || olderConversationsLoading.value) return
-      if (conversations.value.length >= conversationLoadHardCap) {
-        olderConversationsCursor.value = undefined
-        return
-      }
-
-      olderConversationsLoading.value = true
-      try {
-        const query = new URLSearchParams({ limit: String(conversationPageSize), cursor })
-        const page = await httpClient.getJson<WebUiCursorResponse<WebUiAgentSessionEntity>>(
-          `/api/data/agent-sessions?${query.toString()}`
-        )
-        conversations.value = mergeConversations(conversations.value, page.items.map(toConversationSummary))
-        olderConversationsCursor.value =
-          conversations.value.length >= conversationLoadHardCap ? undefined : page.nextCursor
-        await nextTick()
-        const nav = conversationNav.value
-        // Keep filling the sidebar while older pages remain (button + scroll still work).
-        if (olderConversationsCursor.value && nav && nav.scrollHeight <= nav.clientHeight + 8) {
-          olderConversationsLoading.value = false
-          await loadOlderConversations()
-          return
-        }
-      } catch (error) {
-        conversationLoadMessage.value = localizedErrorMessage(error)
-      } finally {
-        olderConversationsLoading.value = false
-      }
-    }
-
     const updateConversationScrollState = () => {
-      const nav = conversationNav.value
-      if (!nav) return
-      // Auto-load older sessions when the user scrolls near the bottom.
-      if (
-        nav.scrollHeight - nav.scrollTop - nav.clientHeight <= 72 &&
-        olderConversationsCursor.value &&
-        !olderConversationsLoading.value
-      ) {
-        void loadOlderConversations()
-      }
+      // Scroll state tracking for potential future use (no auto-load)
     }
 
     const mergeMessages = (
@@ -2901,6 +2840,17 @@ const App = defineComponent({
         if (
           existing.status === 'pending' &&
           message.status !== 'pending' &&
+          message.content.length === 0 &&
+          message.reasoning === undefined
+        )
+          continue
+        // Both sides are pending: the SSE accumulation (existing) has content/reasoning
+        // built up in memory, while the DB row returned on refresh is the pre-persistence
+        // placeholder (empty content, no reasoning). Keep the richer in-memory snapshot.
+        if (
+          existing.status === 'pending' &&
+          message.status === 'pending' &&
+          (existing.content.length > 0 || existing.reasoning !== undefined) &&
           message.content.length === 0 &&
           message.reasoning === undefined
         )
@@ -5836,48 +5786,7 @@ const App = defineComponent({
                               collapsed
                                 ? undefined
                                 : h('div', { class: 'conversation-group-items' }, [
-                                    ...group.conversations
-                                      .slice(0, conversationGroupDefaultVisibleCount)
-                                      .map(renderConversationItem),
-                                    ...(groupHasMore && !collapsed
-                                      ? [
-                                          h(
-                                            'div',
-                                            { class: 'conversation-group-footer' },
-                                            h(
-                                              'button',
-                                              {
-                                                class: [
-                                                  'conversation-group-show-more-button',
-                                                  { 'conversation-group-show-more-open': groupCanCollapse }
-                                                ],
-                                                type: 'button',
-                                                'aria-expanded': groupExpanded,
-                                                onClick: () => toggleConversationGroupExpanded(group.id)
-                                              },
-                                              [
-                                                h(
-                                                  'span',
-                                                  {
-                                                    class: 'conversation-group-show-more-chevron',
-                                                    'aria-hidden': 'true'
-                                                  },
-                                                  renderActionIcon('down')
-                                                ),
-                                                h(
-                                                  'span',
-                                                  groupCanCollapse ? text('collapseGroupMore') : text('showMoreGroup')
-                                                )
-                                              ]
-                                            )
-                                          )
-                                        ]
-                                      : []),
-                                    ...(groupExpanded
-                                      ? group.conversations
-                                          .slice(conversationGroupDefaultVisibleCount)
-                                          .map(renderConversationItem)
-                                      : [])
+                                    ...group.conversations.map(renderConversationItem)
                                   ])
                             ]
                           )
