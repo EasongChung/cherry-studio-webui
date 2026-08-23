@@ -2800,9 +2800,7 @@ const App = defineComponent({
         // Guard the index access: noUncheckedIndexedAccess still types [0] as possibly undefined.
         const latestConversation = conversations.value[0]
         if (!selectedConversationId.value && latestConversation) {
-          // Auto-open the newest session without expanding its per-group show-more footer,
-          // so a refreshed sidebar stays collapsed until the user explicitly expands it.
-          selectConversation(latestConversation.id, { reveal: false })
+          selectConversation(latestConversation.id)
         }
       } catch (error) {
         conversations.value = []
@@ -3164,17 +3162,11 @@ const App = defineComponent({
         })
     }
 
-    const selectConversation = (conversationId: string, options?: { reveal?: boolean }) => {
+    const selectConversation = (conversationId: string) => {
       clearStatusPreviewTimers()
       closeConversationMenu()
       statusPreviewOpen.value = false
       const target = conversations.value.find((conversation) => conversation.id === conversationId)
-      if (target) {
-        expandWorkdirGroup(conversationGroupKey(target))
-        // Ensure a selected session hidden behind a collapsed group footer is revealed,
-        // unless the caller opted out (auto-open after refresh must not expand the group).
-        if (options?.reveal !== false) expandConversationGroup(conversationGroupKey(target))
-      }
       if (conversationId === selectedConversationId.value) {
         mobileSidebarOpen.value = false
         void loadConversationMessages(conversationId, 'refresh')
@@ -5786,7 +5778,48 @@ const App = defineComponent({
                               collapsed
                                 ? undefined
                                 : h('div', { class: 'conversation-group-items' }, [
-                                    ...group.conversations.map(renderConversationItem)
+                                    ...group.conversations
+                                      .slice(0, conversationGroupDefaultVisibleCount)
+                                      .map(renderConversationItem),
+                                    ...(groupHasMore && !collapsed
+                                      ? [
+                                          h(
+                                            'div',
+                                            { class: 'conversation-group-footer' },
+                                            h(
+                                              'button',
+                                              {
+                                                class: [
+                                                  'conversation-group-show-more-button',
+                                                  { 'conversation-group-show-more-open': groupCanCollapse }
+                                                ],
+                                                type: 'button',
+                                                'aria-expanded': groupExpanded,
+                                                onClick: () => toggleConversationGroupExpanded(group.id)
+                                              },
+                                              [
+                                                h(
+                                                  'span',
+                                                  {
+                                                    class: 'conversation-group-show-more-chevron',
+                                                    'aria-hidden': 'true'
+                                                  },
+                                                  renderActionIcon('down')
+                                                ),
+                                                h(
+                                                  'span',
+                                                  groupCanCollapse ? text('collapseGroupMore') : text('showMoreGroup')
+                                                )
+                                              ]
+                                            )
+                                          )
+                                        ]
+                                      : []),
+                                    ...(groupExpanded
+                                      ? group.conversations
+                                          .slice(conversationGroupDefaultVisibleCount)
+                                          .map(renderConversationItem)
+                                      : [])
                                   ])
                             ]
                           )
