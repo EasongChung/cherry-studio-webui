@@ -1,0 +1,682 @@
+<script setup lang="ts">
+import { computed, onMounted, ref } from 'vue'
+import type { createWebUiHttpClient } from '../service/httpClient'
+import { fallbackLanguage, type webUiLanguages } from '../utils/constants'
+import { type TextKey, textPacks } from '../utils/textPacks'
+
+export type SettingsTabId = 'providers' | 'prompts' | 'mcp' | 'preferences'
+export type WebUiLanguageId = (typeof webUiLanguages)[number]['id']
+
+interface ProviderEndpointConfig {
+  baseUrl?: string
+  url?: string
+  apiKey?: string
+}
+
+interface ProviderApiKeyEntry {
+  id: string
+  key: string
+  label?: string
+  isEnabled?: boolean
+}
+
+interface ProviderEntity {
+  id: string
+  name: string
+  isEnabled?: boolean
+  presetProviderId?: string
+  defaultChatEndpoint?: string
+  endpointConfigs?: Record<string, ProviderEndpointConfig>
+  apiKeys?: ProviderApiKeyEntry[]
+}
+
+interface ModelEntity {
+  id: string
+  providerId: string
+  name: string
+  apiModelId?: string
+  isEnabled?: boolean
+}
+
+interface WebUiPreferences {
+  showEstimatedTokens?: boolean
+  thoughtAutoCollapse?: boolean
+  chatInputPinnedTools?: string[]
+  agentInputPinnedTools?: string[]
+}
+
+const props = defineProps<{
+  httpClient: ReturnType<typeof createWebUiHttpClient>
+  language: string
+}>()
+
+const emit = defineEmits<{
+  (e: 'close'): void
+  (e: 'settingsChanged'): void
+}>()
+
+const currentTab = ref<SettingsTabId>('providers')
+const text = (key: TextKey) => {
+  const langKey = (props.language in textPacks ? props.language : fallbackLanguage) as keyof typeof textPacks
+  return textPacks[langKey]?.[key] ?? textPacks[fallbackLanguage][key]
+}
+
+// --- Providers & Models State ---
+const providers = ref<ProviderEntity[]>([])
+const models = ref<ModelEntity[]>([])
+const selectedProviderId = ref<string>('')
+const providerSearchQuery = ref('')
+const isLoadingProviders = ref(false)
+const isSavingProvider = ref(false)
+const testConnectionState = ref<{
+  loading: boolean
+  success?: boolean
+  latencyMs?: number
+  message?: string
+}>({ loading: false })
+
+// Editing Provider state
+const editProviderName = ref('')
+const editBaseUrl = ref('')
+const editApiKey = ref('')
+const isApiKeyDirty = ref(false)
+const showApiKeyPlain = ref(false)
+const editIsEnabled = ref(true)
+
+// Add Custom Model form state
+const showAddModelForm = ref(false)
+const newModelId = ref('')
+const newModelName = ref('')
+const isAddingModel = ref(false)
+
+// Pull Models state
+const isPullingModels = ref(false)
+
+// --- Preferences State ---
+const preferences = ref<{
+  showEstimatedTokens: boolean
+  thoughtAutoCollapse: boolean
+}>({
+  showEstimatedTokens: false,
+  thoughtAutoCollapse: false
+})
+const isSavingPreferences = ref(false)
+
+// Toast feedback
+const toastMessage = ref('')
+let toastTimer: number | undefined
+const showToast = (msg: string) => {
+  toastMessage.value = msg
+  if (toastTimer) window.clearTimeout(toastTimer)
+  toastTimer = window.setTimeout(() => {
+    toastMessage.value = ''
+  }, 2500)
+}
+
+const filteredProviders = computed(() => {
+  const query = providerSearchQuery.value.trim().toLowerCase()
+  if (!query) return providers.value
+  return providers.value.filter(
+    (p) => p.name.toLowerCase().includes(query) || p.id.toLowerCase().includes(query)
+  )
+})
+
+const selectedProvider = computed(() => {
+  return providers.value.find((p) => p.id === selectedProviderId.value)
+})
+
+const currentProviderModels = computed(() => {
+  if (!selectedProviderId.value) return []
+  return models.value.filter((m) => m.providerId === selectedProviderId.value)
+})
+
+// Load Providers from DataApi
+const loadProviders = async () => {
+  isLoadingProviders.value = true
+  try {
+    const list = await props.httpClient.getJson<ProviderEntity[]>('/api/data/providers')
+    providers.value = Array.isArray(list) ? list : []
+    if (providers.value.length > 0 && !selectedProviderId.value && providers.value[0]) {
+      selectProvider(providers.value[0].id)
+    }
+  } catch (err) {
+    console.error('Failed to load providers:', err)
+  } finally {
+    isLoadingProviders.value = false
+  }
+}
+
+// Load Models from DataApi
+const loadModels = async () => {
+  try {
+    const list = await props.httpClient.getJson<ModelEntity[]>('/api/data/models')
+    models.value = Array.isArray(list) ? list : []
+  } catch (err) {
+    console.error('Failed to load models:', err)
+  }
+}
+
+// Load Preferences
+const loadPreferences = async () => {
+  try {
+    const data = await props.httpClient.getJson<WebUiPreferences>('/api/webui/preferences')
+    if (data) {
+      preferences.value = {
+        showEstimatedTokens: Boolean(data.showEstimatedTokens),
+        thoughtAutoCollapse: Boolean(data.thoughtAutoCollapse)
+      }
+    }
+  } catch (err) {
+    console.error('Failed to load preferences:', err)
+  }
+}
+
+const selectProvider = (id: string) => {
+  selectedProviderId.value = id
+  testConnectionState.value = { loading: false }
+  showAddModelForm.value = false
+  isApiKeyDirty.value = false
+  showApiKeyPlain.value = false
+
+  const p = providers.value.find((item) => item.id === id)
+  if (p) {
+    editProviderName.value = p.name || ''
+    editIsEnabled.value = p.isEnabled !== false
+    const chatCfg =
+      p.endpointConfigs?.['openai-chat-completions'] ??
+      p.endpointConfigs?.['anthropic-messages'] ??
+      (p.endpointConfigs ? Object.values(p.endpointConfigs)[0] : undefined)
+    editBaseUrl.value = chatCfg?.baseUrl ?? chatCfg?.url ?? ''
+
+    const firstKey = p.apiKeys?.[0]?.key
+    if (firstKey) {
+      editApiKey.value = firstKey.length > 8 ? `${firstKey.slice(0, 4)}••••••••${firstKey.slice(-4)}` : '••••••••'
+    } else {
+      editApiKey.value = ''
+    }
+  }
+}
+
+const onApiKeyInput = () => {
+  isApiKeyDirty.value = true
+}
+
+// Save Provider Details
+const saveProviderDetails = async () => {
+  if (!selectedProvider.value) return
+  isSavingProvider.value = true
+  try {
+    const p = selectedProvider.value
+    const chatEndpointKey = p.defaultChatEndpoint || 'openai-chat-completions'
+    const endpointConfigs = {
+      ...(p.endpointConfigs ?? {}),
+      [chatEndpointKey]: {
+        ...(p.endpointConfigs?.[chatEndpointKey] ?? {}),
+        baseUrl: editBaseUrl.value.trim()
+      }
+    }
+
+    // 1. Update Provider metadata
+    await props.httpClient.patchJson(`/api/data/providers/${p.id}`, {
+      name: editProviderName.value.trim() || p.name,
+      isEnabled: editIsEnabled.value,
+      endpointConfigs
+    })
+
+    // 2. Update API Key if dirty
+    if (isApiKeyDirty.value && editApiKey.value.trim()) {
+      const rawKey = editApiKey.value.trim()
+      await props.httpClient.postJson(`/api/data/providers/${p.id}/api-keys`, {
+        key: rawKey
+      })
+    }
+
+    await loadProviders()
+    selectProvider(p.id)
+    showToast(text('save') + ' ✓')
+    emit('settingsChanged')
+  } catch (err: unknown) {
+    showToast(err instanceof Error ? err.message : 'Save failed')
+  } finally {
+    isSavingProvider.value = false
+  }
+}
+
+// Toggle Provider Enabled
+const toggleProviderEnabled = async (p: ProviderEntity) => {
+  const nextVal = p.isEnabled === false
+  try {
+    await props.httpClient.patchJson(`/api/data/providers/${p.id}`, {
+      isEnabled: nextVal
+    })
+    p.isEnabled = nextVal
+    if (p.id === selectedProviderId.value) {
+      editIsEnabled.value = nextVal
+    }
+    emit('settingsChanged')
+  } catch (err: unknown) {
+    showToast(err instanceof Error ? err.message : 'Update failed')
+  }
+}
+
+// Test Connection
+const testConnection = async () => {
+  if (!selectedProvider.value) return
+  testConnectionState.value = { loading: true }
+  try {
+    const rawKey = isApiKeyDirty.value ? editApiKey.value.trim() : undefined
+    const res = await props.httpClient.postJson<{
+      ok: boolean
+      latencyMs?: number
+      error?: string
+    }>('/api/webui/providers/test', {
+      providerId: selectedProvider.value.id,
+      baseUrl: editBaseUrl.value.trim() || undefined,
+      apiKey: rawKey
+    })
+
+    if (res.ok) {
+      testConnectionState.value = {
+        loading: false,
+        success: true,
+        latencyMs: res.latencyMs,
+        message: `✓ ${text('connectionSuccessful')} (${res.latencyMs ?? 0}ms)`
+      }
+    } else {
+      testConnectionState.value = {
+        loading: false,
+        success: false,
+        message: res.error || text('connectionFailed')
+      }
+    }
+  } catch (err: unknown) {
+    testConnectionState.value = {
+      loading: false,
+      success: false,
+      message: err instanceof Error ? err.message : text('connectionFailed')
+    }
+  }
+}
+
+// Pull / Resolve Models from provider
+const pullModels = async () => {
+  if (!selectedProvider.value) return
+  const currentPid = selectedProvider.value.id
+  isPullingModels.value = true
+  try {
+    const res = await props.httpClient.getJson<{ models?: ModelEntity[] } | ModelEntity[]>(
+      `/api/data/providers/${currentPid}/models:resolve`
+    )
+    const resolved = Array.isArray(res) ? res : res?.models ?? []
+    if (resolved.length > 0) {
+      await props.httpClient.postJson('/api/data/models:batch', {
+        models: resolved.map((m: ModelEntity) => ({
+          ...m,
+          providerId: currentPid
+        }))
+      })
+      await loadModels()
+      showToast(`${text('modelsPulled')}: ${resolved.length}`)
+      emit('settingsChanged')
+    } else {
+      showToast(text('noModelsFound'))
+    }
+  } catch (err: unknown) {
+    showToast(err instanceof Error ? err.message : 'Pull failed')
+  } finally {
+    isPullingModels.value = false
+  }
+}
+
+// Toggle Model Enabled
+const toggleModelEnabled = async (m: ModelEntity) => {
+  const nextVal = m.isEnabled === false
+  try {
+    await props.httpClient.patchJson(`/api/data/models/${encodeURIComponent(m.id)}`, {
+      isEnabled: nextVal
+    })
+    m.isEnabled = nextVal
+    emit('settingsChanged')
+  } catch (err: unknown) {
+    showToast(err instanceof Error ? err.message : 'Update model failed')
+  }
+}
+
+// Add Custom Model
+const addCustomModel = async () => {
+  if (!selectedProvider.value || !newModelId.value.trim()) return
+  isAddingModel.value = true
+  try {
+    await props.httpClient.postJson('/api/data/models', {
+      id: `${selectedProvider.value.id}:${newModelId.value.trim()}`,
+      providerId: selectedProvider.value.id,
+      apiModelId: newModelId.value.trim(),
+      name: newModelName.value.trim() || newModelId.value.trim(),
+      isEnabled: true
+    })
+    newModelId.value = ''
+    newModelName.value = ''
+    showAddModelForm.value = false
+    await loadModels()
+    showToast(text('modelAdded'))
+    emit('settingsChanged')
+  } catch (err: unknown) {
+    showToast(err instanceof Error ? err.message : 'Add model failed')
+  } finally {
+    isAddingModel.value = false
+  }
+}
+
+// Save Preferences
+const togglePreference = async (key: 'thoughtAutoCollapse' | 'showEstimatedTokens') => {
+  preferences.value[key] = !preferences.value[key]
+  isSavingPreferences.value = true
+  try {
+    await props.httpClient.putJson('/api/webui/preferences', {
+      [key]: preferences.value[key]
+    })
+    showToast(text('save') + ' ✓')
+    emit('settingsChanged')
+  } catch (err: unknown) {
+    showToast(err instanceof Error ? err.message : 'Save preference failed')
+  } finally {
+    isSavingPreferences.value = false
+  }
+}
+
+onMounted(() => {
+  loadProviders()
+  loadModels()
+  loadPreferences()
+})
+</script>
+
+<template>
+  <div class="settings-modal-backdrop" @click.self="emit('close')">
+    <div class="settings-modal" role="dialog" aria-modal="true">
+      <!-- Header -->
+      <header class="settings-modal-header">
+        <div class="settings-modal-title">
+          <svg class="settings-header-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" />
+            <circle cx="12" cy="12" r="3" />
+          </svg>
+          <h2>{{ text('settings') }}</h2>
+        </div>
+        <button class="settings-close-button" type="button" :title="text('close')" @click="emit('close')">
+          ×
+        </button>
+      </header>
+
+      <!-- Body Layout: Sidebar Tabs + Content Area -->
+      <div class="settings-modal-body">
+        <nav class="settings-nav" aria-label="Settings Categories">
+          <button
+            class="settings-nav-item"
+            :class="{ 'settings-nav-item-active': currentTab === 'providers' }"
+            type="button"
+            @click="currentTab = 'providers'"
+          >
+            <span class="settings-nav-icon">🤖</span>
+            <span>{{ text('modelProviders') }}</span>
+          </button>
+          <button
+            class="settings-nav-item"
+            :class="{ 'settings-nav-item-active': currentTab === 'preferences' }"
+            type="button"
+            @click="currentTab = 'preferences'"
+          >
+            <span class="settings-nav-icon">⚙️</span>
+            <span>{{ text('generalPreferences') }}</span>
+          </button>
+        </nav>
+
+        <!-- Main Content Area -->
+        <main class="settings-content-area">
+          <!-- Toast notification -->
+          <div v-if="toastMessage" class="settings-toast">
+            {{ toastMessage }}
+          </div>
+
+          <!-- TAB 1: Providers & Models -->
+          <div v-if="currentTab === 'providers'" class="settings-tab-pane">
+            <div class="providers-layout">
+              <!-- Left: Providers List -->
+              <aside class="providers-sidebar">
+                <div class="providers-search-wrap">
+                  <input
+                    v-model="providerSearchQuery"
+                    class="settings-input settings-search-input"
+                    type="search"
+                    :placeholder="text('searchProviders')"
+                  />
+                </div>
+                <div class="providers-list">
+                  <div
+                    v-for="p in filteredProviders"
+                    :key="p.id"
+                    class="provider-list-item"
+                    :class="{ 'provider-list-item-selected': p.id === selectedProviderId }"
+                    @click="selectProvider(p.id)"
+                  >
+                    <div class="provider-item-info">
+                      <span class="provider-item-name">{{ p.name || p.id }}</span>
+                      <span class="provider-item-id">{{ p.id }}</span>
+                    </div>
+                    <label class="settings-switch" @click.stop>
+                      <input
+                        type="checkbox"
+                        :checked="p.isEnabled !== false"
+                        @change="toggleProviderEnabled(p)"
+                      />
+                      <span class="settings-slider" />
+                    </label>
+                  </div>
+                  <div v-if="filteredProviders.length === 0" class="settings-empty-hint">
+                    {{ text('noProvidersFound') }}
+                  </div>
+                </div>
+              </aside>
+
+              <!-- Right: Selected Provider Details -->
+              <section v-if="selectedProvider" class="provider-details-panel">
+                <div class="panel-section-header">
+                  <h3>{{ selectedProvider.name || selectedProvider.id }}</h3>
+                  <div class="section-actions">
+                    <button
+                      class="settings-btn settings-btn-primary"
+                      type="button"
+                      :disabled="isSavingProvider"
+                      @click="saveProviderDetails"
+                    >
+                      {{ isSavingProvider ? text('saving') : text('save') }}
+                    </button>
+                  </div>
+                </div>
+
+                <!-- Form fields -->
+                <div class="settings-form-grid">
+                  <div class="settings-form-row">
+                    <label class="settings-label">{{ text('providerName') }}</label>
+                    <input
+                      v-model="editProviderName"
+                      class="settings-input"
+                      type="text"
+                      placeholder="e.g. DeepSeek"
+                    />
+                  </div>
+
+                  <div class="settings-form-row">
+                    <label class="settings-label">{{ text('apiHost') }} / Base URL</label>
+                    <input
+                      v-model="editBaseUrl"
+                      class="settings-input"
+                      type="url"
+                      placeholder="https://api.deepseek.com/v1"
+                    />
+                  </div>
+
+                  <div class="settings-form-row">
+                    <label class="settings-label">API Key</label>
+                    <div class="api-key-input-wrap">
+                      <input
+                        v-model="editApiKey"
+                        class="settings-input"
+                        :type="showApiKeyPlain ? 'text' : 'password'"
+                        placeholder="sk-..."
+                        @input="onApiKeyInput"
+                      />
+                      <button
+                        class="settings-btn settings-btn-sm"
+                        type="button"
+                        @click="showApiKeyPlain = !showApiKeyPlain"
+                      >
+                        {{ showApiKeyPlain ? '🙈' : '👁️' }}
+                      </button>
+                    </div>
+                  </div>
+
+                  <!-- Test connection button & output -->
+                  <div class="settings-form-row test-connection-row">
+                    <button
+                      class="settings-btn settings-btn-secondary"
+                      type="button"
+                      :disabled="testConnectionState.loading"
+                      @click="testConnection"
+                    >
+                      <span v-if="testConnectionState.loading" class="spinner-inline" />
+                      {{ testConnectionState.loading ? text('testing') : text('testConnection') }}
+                    </button>
+                    <span
+                      v-if="testConnectionState.message"
+                      class="test-connection-status"
+                      :class="{ 'test-success': testConnectionState.success, 'test-failed': !testConnectionState.success }"
+                    >
+                      {{ testConnectionState.message }}
+                    </span>
+                  </div>
+                </div>
+
+                <!-- Models Section -->
+                <div class="models-section">
+                  <div class="models-section-header">
+                    <h4>{{ text('modelList') }} ({{ currentProviderModels.length }})</h4>
+                    <div class="models-actions">
+                      <button
+                        class="settings-btn settings-btn-sm"
+                        type="button"
+                        :disabled="isPullingModels"
+                        @click="pullModels"
+                      >
+                        {{ isPullingModels ? text('pullingModels') : text('pullModels') }}
+                      </button>
+                      <button
+                        class="settings-btn settings-btn-sm settings-btn-secondary"
+                        type="button"
+                        @click="showAddModelForm = !showAddModelForm"
+                      >
+                        {{ showAddModelForm ? text('cancel') : text('addModel') }}
+                      </button>
+                    </div>
+                  </div>
+
+                  <!-- Add Model Form -->
+                  <div v-if="showAddModelForm" class="add-model-inline-form">
+                    <input
+                      v-model="newModelId"
+                      class="settings-input settings-input-sm"
+                      type="text"
+                      placeholder="Model ID (e.g. deepseek-chat)"
+                    />
+                    <input
+                      v-model="newModelName"
+                      class="settings-input settings-input-sm"
+                      type="text"
+                      placeholder="Display Name (optional)"
+                    />
+                    <button
+                      class="settings-btn settings-btn-sm settings-btn-primary"
+                      type="button"
+                      :disabled="!newModelId.trim() || isAddingModel"
+                      @click="addCustomModel"
+                    >
+                      {{ text('confirm') }}
+                    </button>
+                  </div>
+
+                  <!-- Models List Table -->
+                  <div class="models-table-wrap">
+                    <div
+                      v-for="m in currentProviderModels"
+                      :key="m.id"
+                      class="model-table-row"
+                    >
+                      <div class="model-row-info">
+                        <span class="model-row-name">{{ m.name || m.apiModelId || m.id }}</span>
+                        <span class="model-row-id">{{ m.apiModelId || m.id }}</span>
+                      </div>
+                      <label class="settings-switch">
+                        <input
+                          type="checkbox"
+                          :checked="m.isEnabled !== false"
+                          @change="toggleModelEnabled(m)"
+                        />
+                        <span class="settings-slider" />
+                      </label>
+                    </div>
+                    <div v-if="currentProviderModels.length === 0" class="settings-empty-hint">
+                      {{ text('noModelsConfigured') }}
+                    </div>
+                  </div>
+                </div>
+              </section>
+            </div>
+          </div>
+
+          <!-- TAB 2: Preferences -->
+          <div v-if="currentTab === 'preferences'" class="settings-tab-pane">
+            <div class="preferences-panel">
+              <div class="panel-section-header">
+                <h3>{{ text('generalPreferences') }}</h3>
+              </div>
+
+              <div class="preference-group">
+                <!-- Thought auto collapse -->
+                <div class="preference-item">
+                  <div class="preference-item-meta">
+                    <span class="preference-title">{{ text('thoughtAutoCollapseTitle') }}</span>
+                    <span class="preference-desc">{{ text('thoughtAutoCollapseDesc') }}</span>
+                  </div>
+                  <label class="settings-switch">
+                    <input
+                      type="checkbox"
+                      :checked="preferences.thoughtAutoCollapse"
+                      @change="togglePreference('thoughtAutoCollapse')"
+                    />
+                    <span class="settings-slider" />
+                  </label>
+                </div>
+
+                <!-- Show estimated tokens -->
+                <div class="preference-item">
+                  <div class="preference-item-meta">
+                    <span class="preference-title">{{ text('showEstimatedTokensTitle') }}</span>
+                    <span class="preference-desc">{{ text('showEstimatedTokensDesc') }}</span>
+                  </div>
+                  <label class="settings-switch">
+                    <input
+                      type="checkbox"
+                      :checked="preferences.showEstimatedTokens"
+                      @change="togglePreference('showEstimatedTokens')"
+                    />
+                    <span class="settings-slider" />
+                  </label>
+                </div>
+              </div>
+            </div>
+          </div>
+        </main>
+      </div>
+    </div>
+  </div>
+</template>

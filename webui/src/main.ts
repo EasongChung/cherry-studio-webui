@@ -17,6 +17,7 @@ import {
 import AskUserQuestionPanel from './components/AskUserQuestionPanel.vue'
 import AuthPanel, { type RememberVerifyOption } from './components/AuthPanel.vue'
 import PermissionRequestPanel from './components/PermissionRequestPanel.vue'
+import SettingsModal from './components/SettingsModal.vue'
 import ToolCallBlock from './components/ToolCallBlock.vue'
 import { createWebUiHttpClient, WebUiHttpError } from './service/httpClient'
 import { createWebUiSseClient } from './service/sseClient'
@@ -193,6 +194,7 @@ const App = defineComponent({
     const language = ref(normalizeLanguage(navigator.language))
     const languageOverride = ref(false)
     const languagePickerOpen = ref(false)
+    const settingsModalOpen = ref(false)
     const authRequired = ref(false)
     const isAuthenticated = ref(true)
     const authKeyDraft = ref('')
@@ -5833,7 +5835,28 @@ const App = defineComponent({
                         { class: 'composer-error conversation-action-error', role: 'alert' },
                         conversationActionError.value
                       )
-                    : undefined
+                    : undefined,
+                  h('footer', { class: 'conversation-list-footer' }, [
+                    h(
+                      'button',
+                      {
+                        class: 'sidebar-settings-button',
+                        type: 'button',
+                        title: text('settings'),
+                        'aria-label': text('settings'),
+                        onClick: () => {
+                          settingsModalOpen.value = true
+                          if (mobileSidebarOpen.value) {
+                            mobileSidebarOpen.value = false
+                          }
+                        }
+                      },
+                      [
+                        renderActionIcon('settings'),
+                        h('span', { class: 'sidebar-settings-label' }, text('settings'))
+                      ]
+                    )
+                  ])
                 ]
               ),
               h('section', { class: 'chat-stage', 'aria-label': text('desktopSession') }, [
@@ -7328,6 +7351,19 @@ const App = defineComponent({
                       ]
                     )
                   ])
+                : undefined,
+              settingsModalOpen.value
+                ? h(SettingsModal, {
+                    httpClient,
+                    language: language.value,
+                    onClose: () => {
+                      settingsModalOpen.value = false
+                    },
+                    onSettingsChanged: () => {
+                      loadModels()
+                      loadConversations()
+                    }
+                  })
                 : undefined
             ]
           )

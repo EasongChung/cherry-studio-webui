@@ -33,6 +33,7 @@ export type ActionIconName =
   | 'search'
   | 'volume'
   | 'quote'
+  | 'settings'
 
 export type AgentStatusIconName = 'pending' | 'in_progress' | 'completed' | 'error' | 'subagent' | 'artifact'
 
@@ -277,6 +278,13 @@ export const renderActionIcon = (name: ActionIconName, restore = false) => {
     return h('svg', iconBaseProps, [
       h('path', { d: 'M10 4c-3.3 0-6 2.3-6 6v5a2 2 0 0 0 2 2h2a2 2 0 0 0 2-2v-4a2 2 0 0 0-2-2c0-1.5.9-2.5 2-3z' }),
       h('path', { d: 'M19 4c-3.3 0-6 2.3-6 6v5a2 2 0 0 0 2 2h2a2 2 0 0 0 2-2v-4a2 2 0 0 0-2-2c0-1.5.9-2.5 2-3z' })
+    ])
+  if (name === 'settings')
+    return h('svg', iconBaseProps, [
+      h('path', {
+        d: 'M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z'
+      }),
+      h('circle', { cx: '12', cy: '12', r: '3' })
     ])
   return h('svg', iconBaseProps)
 }

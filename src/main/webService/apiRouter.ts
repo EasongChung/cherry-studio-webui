@@ -185,6 +185,7 @@ const MAX_WEBUI_ATTACHMENTS_BYTES = 25 * 1024 * 1024
 const MAX_WEBUI_REQUEST_BYTES = 40 * 1024 * 1024
 const webUiModelsPath = '/api/webui/models'
 const webUiPreferencesPath = '/api/webui/preferences'
+const webUiProviderTestPath = '/api/webui/providers/test'
 const webUiApiRetryPath = /^\/api\/webui\/api-retry\/([^/]+)$/
 const webUiStreamCachePath = /^\/api\/webui\/stream-cache\/([^/]+)$/
 const sessionMessagePath = /^\/api\/agent-sessions\/([^/]+)\/messages$/
@@ -202,7 +203,9 @@ const sessionWorkspacePreviewPath = /^\/api\/agent-sessions\/([^/]+)\/workspace\
 const fileEntryPath = /^\/api\/files\/([^/]+)$/
 const readableDataApiPatterns = [
   /^\/agents$/,
-  /^\/models$/,
+  /^\/models(?:$|\/)/,
+  /^\/providers(?:$|\/)/,
+  /^\/prompts(?:$|\/)/,
   /^\/agent-workspaces$/,
   /^\/agent-sessions$/,
   /^\/agent-sessions\/latest$/,
@@ -211,9 +214,27 @@ const readableDataApiPatterns = [
   /^\/skills(?:$|\/)/,
   /^\/knowledge-bases(?:$|\/)/
 ] as const
-const deletableDataApiMessagePath = /^\/agent-sessions\/([^/]+)\/messages\/[^/]+$/
-const writableDataApiSessionPath = /^\/agent-sessions\/([^/]+)$/
-const writableDataApiSessionWorkspacePath = /^\/agent-sessions\/([^/]+)\/workspace$/
+
+const writableDataApiPatterns = [
+  { pattern: /^\/agent-sessions$/, methods: ['POST'] },
+  { pattern: /^\/agent-sessions\/[^/]+$/, methods: ['PATCH', 'DELETE'] },
+  { pattern: /^\/agent-sessions\/[^/]+\/workspace$/, methods: ['PUT'] },
+  { pattern: /^\/agent-sessions\/[^/]+\/messages\/[^/]+$/, methods: ['DELETE'] },
+  { pattern: /^\/providers$/, methods: ['POST'] },
+  { pattern: /^\/providers\/[^/]+$/, methods: ['PATCH', 'DELETE'] },
+  { pattern: /^\/providers\/[^/]+\/api-keys$/, methods: ['POST', 'PUT'] },
+  { pattern: /^\/providers\/[^/]+\/api-keys\/[^/]+$/, methods: ['PATCH', 'DELETE'] },
+  { pattern: /^\/models$/, methods: ['POST'] },
+  { pattern: /^\/models:batch$/, methods: ['POST'] },
+  { pattern: /^\/models\/[^/]+$/, methods: ['PATCH', 'PUT', 'DELETE'] },
+  { pattern: /^\/prompts$/, methods: ['POST'] },
+  { pattern: /^\/prompts\/[^/]+$/, methods: ['PATCH', 'DELETE'] }
+] as const
+
+const isAllowedDataApiWritePath = (method: string, path: string) =>
+  writableDataApiPatterns.some(
+    (item) => (item.methods as readonly string[]).includes(method) && item.pattern.test(path)
+  )
 
 const toQueryRecord = (searchParams: URLSearchParams) => {
   const query: Record<string, string> = {}
@@ -563,13 +584,9 @@ const handleDataApiProxy = async (
   const dataPath = url.pathname.slice(dataApiPrefix.length) || '/'
   const method = request.method ?? 'GET'
   const isRead = method === 'GET' && isAllowedDataApiReadPath(dataPath)
-  const isSessionCreate = method === 'POST' && dataPath === '/agent-sessions'
-  const sessionMessageDeleteMatch = method === 'DELETE' ? dataPath.match(deletableDataApiMessagePath) : null
-  const sessionWriteMatch =
-    method === 'PATCH' || method === 'DELETE' ? dataPath.match(writableDataApiSessionPath) : null
-  const workspaceWriteMatch = method === 'PUT' ? dataPath.match(writableDataApiSessionWorkspacePath) : null
+  const isWrite = isAllowedDataApiWritePath(method, dataPath)
 
-  if (!isRead && !isSessionCreate && !sessionMessageDeleteMatch && !sessionWriteMatch && !workspaceWriteMatch) {
+  if (!isRead && !isWrite) {
     return {
       status: 404,
       body: {
@@ -580,7 +597,7 @@ const handleDataApiProxy = async (
   }
 
   try {
-    const body = isSessionCreate || method === 'PATCH' || method === 'PUT' ? await readJsonBody(request) : undefined
+    const body = isWrite ? await readJsonBody(request) : undefined
     const apiRequest: DataRequest = {
       id: randomUUID(),
       method: method as HttpMethod,
@@ -597,24 +614,26 @@ const handleDataApiProxy = async (
       status: apiResponse.status,
       body: apiResponse.error ?? apiResponse.data ?? null
     }
-    if (isSessionCreate && apiResponse.status >= 200 && apiResponse.status < 300) {
-      sseRelay.broadcast({ event: 'sync', data: { reason: 'session-created' } })
-    }
-    if (sessionMessageDeleteMatch && apiResponse.status >= 200 && apiResponse.status < 300) {
-      const conversationId = decodeURIComponent(sessionMessageDeleteMatch[1] ?? '')
-      application.get('CacheService').deleteShared(AGENT_SESSION_CONTEXT_USAGE_CACHE_KEY(conversationId))
-      sseRelay.broadcast({
-        event: 'sync',
-        data: { conversationId, reason: 'message-deleted' }
-      })
-    }
-    if (sessionWriteMatch && apiResponse.status >= 200 && apiResponse.status < 300) {
-      const conversationId = decodeURIComponent(sessionWriteMatch[1] ?? '')
-      application.get('CacheService').deleteShared(AGENT_SESSION_CONTEXT_USAGE_CACHE_KEY(conversationId))
-      sseRelay.broadcast({
-        event: 'sync',
-        data: { conversationId, reason: method === 'DELETE' ? 'session-deleted' : 'session-updated' }
-      })
+    if (apiResponse.status >= 200 && apiResponse.status < 300) {
+      if (dataPath === '/agent-sessions' && method === 'POST') {
+        sseRelay.broadcast({ event: 'sync', data: { reason: 'session-created' } })
+      } else if (dataPath.startsWith('/agent-sessions')) {
+        const conversationIdMatch = dataPath.match(/^\/agent-sessions\/([^/]+)/)
+        const conversationId = conversationIdMatch ? decodeURIComponent(conversationIdMatch[1] ?? '') : undefined
+        if (conversationId) {
+          application.get('CacheService').deleteShared(AGENT_SESSION_CONTEXT_USAGE_CACHE_KEY(conversationId))
+        }
+        sseRelay.broadcast({
+          event: 'sync',
+          data: { conversationId, reason: method === 'DELETE' ? 'session-deleted' : 'session-updated' }
+        })
+      } else if (
+        dataPath.startsWith('/providers') ||
+        dataPath.startsWith('/models') ||
+        dataPath.startsWith('/prompts')
+      ) {
+        sseRelay.broadcast({ event: 'sync', data: { reason: 'settings-updated' } })
+      }
     }
     return result
   } catch (error) {
@@ -897,6 +916,97 @@ export const createWebUiApiRouter = ({
       }
 
       return methodNotAllowed(['GET', 'PUT'])
+    }
+
+    if (pathname === webUiProviderTestPath) {
+      if (method !== 'POST') return methodNotAllowed(['POST'])
+      const body = (await readJsonBody(request)) as
+        | { providerId?: string; baseUrl?: string; apiKey?: string }
+        | undefined
+      if (!body || typeof body !== 'object') {
+        return { status: 400, body: { code: 'WEBUI_INVALID_BODY', message: 'Request body must be JSON' } }
+      }
+
+      const startTime = Date.now()
+      try {
+        let testUrl = typeof body.baseUrl === 'string' ? body.baseUrl.trim() : ''
+        if (!testUrl && body.providerId) {
+          const providerRes = await ApiServer.getInstance().handleRequest({
+            id: randomUUID(),
+            method: 'GET',
+            path: `/providers/${body.providerId}`,
+            metadata: { timestamp: Date.now() }
+          })
+          const p = providerRes.data as {
+            endpointConfigs?: Record<string, { baseUrl?: string; url?: string }>
+          }
+          const chatCfg =
+            p?.endpointConfigs?.['openai-chat-completions'] ??
+            p?.endpointConfigs?.['anthropic-messages'] ??
+            (p?.endpointConfigs ? Object.values(p.endpointConfigs)[0] : undefined)
+          testUrl = (chatCfg?.baseUrl ?? chatCfg?.url ?? '').trim()
+        }
+
+        if (!testUrl) {
+          return { status: 400, body: { ok: false, error: 'No endpoint URL configured for this provider' } }
+        }
+
+        const cleanBase = testUrl.replace(/\/+$/, '')
+        const probeUrl = cleanBase.endsWith('/v1') ? `${cleanBase}/models` : `${cleanBase}/v1/models`
+
+        const headers: Record<string, string> = {}
+        if (body.apiKey?.trim()) {
+          headers['Authorization'] = `Bearer ${body.apiKey.trim()}`
+        }
+
+        const controller = new AbortController()
+        const timeoutId = setTimeout(() => controller.abort(), 10000)
+
+        const response = await fetch(probeUrl, {
+          method: 'GET',
+          headers,
+          signal: controller.signal
+        }).catch(async () => {
+          return fetch(cleanBase, { method: 'GET', headers, signal: controller.signal })
+        })
+        clearTimeout(timeoutId)
+
+        const latencyMs = Date.now() - startTime
+        if (response.ok) {
+          return { status: 200, body: { ok: true, latencyMs, status: response.status } }
+        }
+        if (response.status === 401 || response.status === 403) {
+          return {
+            status: 200,
+            body: {
+              ok: false,
+              error: 'Authentication failed (401/403): Invalid API Key',
+              status: response.status,
+              latencyMs
+            }
+          }
+        }
+        return {
+          status: 200,
+          body: {
+            ok: false,
+            error: `Server responded with HTTP ${response.status}`,
+            status: response.status,
+            latencyMs
+          }
+        }
+      } catch (err: unknown) {
+        const latencyMs = Date.now() - startTime
+        const isAbort = err instanceof Error && err.name === 'AbortError'
+        return {
+          status: 200,
+          body: {
+            ok: false,
+            error: isAbort ? 'Connection timed out (10s)' : err instanceof Error ? err.message : 'Network error',
+            latencyMs
+          }
+        }
+      }
     }
 
     if (contextUsageMatch) {
