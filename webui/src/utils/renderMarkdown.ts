@@ -94,106 +94,87 @@ type MutableMarkdownLabels = {
 }
 
 /**
- * Preprocess incomplete GFM table syntax so markdown-it can render it during streaming.
+ * Preprocess GFM table syntax so markdown-it can render it during streaming.
  * markdown-it requires a complete table: header row + separator row (|---|) + optional body rows.
- * This function:
- *  1. Finds the last consecutive `|`-prefixed block at the end of source.
- *  2. Counts columns from the header row.
- *  3. If the separator row is missing or incomplete, inserts/replaces it with a complete one.
- *  4. Pads the last data row with trailing `|` and empty cells so it parses as a table row.
+ * During streaming the table may be the last block in the source (typical) or a complete
+ * table followed by later-generated text.  This function finds ALL `|`-prefixed table blocks
+ * and fixes each one:
+ *  1. Counts columns from the header row.
+ *  2. If the separator row is missing or has fewer than 3 dashes per column, replaces it.
+ *  3. Pads the last data row with trailing `|` and empty cells so it parses as a table row.
  * Does NOT modify the original source — only the display copy passed to markdown-it.
  */
 const preprocessTable = (source: string): string => {
   const lines = source.split('\n')
-
-  // Find the last consecutive `|`-prefixed block at the end of source.
-  // Walk backwards: trailing empty lines are OK, first non-empty non-| line breaks the block.
-  let lastTableRow = -1
-  for (let i = lines.length - 1; i >= 0; i--) {
-    const trimmed = lines[i]?.trim() ?? ''
-    if (trimmed.startsWith('|')) {
-      lastTableRow = i
-      break
-    }
-    if (trimmed !== '') break
-  }
-  if (lastTableRow < 0) return source
-
-  // Walk up to find the first row of this table block.
-  let firstTableRow = lastTableRow
-  while (firstTableRow > 0) {
-    const trimmed = lines[firstTableRow - 1]?.trim() ?? ''
-    if (trimmed.startsWith('|')) {
-      firstTableRow--
-    } else {
-      break
-    }
-  }
-  if (firstTableRow === lastTableRow) return source // Only one row — not enough for a table.
-
-  // Count columns from the header row.
-  const header = lines[firstTableRow]
-  if (!header) return source
-  const headerCells = header.split('|').filter((cell) => cell.trim() !== '').length
-  if (headerCells < 2) return source
-
-  // Work on a clone (display only, never mutates the original source).
   const result = [...lines]
 
-  // Determine which rows are separator (---), header, and data.
-  // Separator row is usually the second row (firstTableRow + 1) if it contains dashes.
-  let separatorRow = -1
-  for (let i = firstTableRow + 1; i <= lastTableRow; i++) {
-    const trimmed = lines[i]?.trim() ?? ''
-    // GFM separator: | --- | --- | ... or |:---:| --- | etc.
-    if (/^\|[\s\-:]+\|?$/.test(trimmed) && /-/.test(trimmed)) {
-      separatorRow = i
-      break
+  // Scan every line for table blocks (consecutive |-prefixed lines with ≥2 rows).
+  let row = 0
+  while (row < result.length) {
+    const trimmed = result[row]?.trim() ?? ''
+    if (!trimmed.startsWith('|')) {
+      row++
+      continue
     }
+
+    // Found a candidate — walk the block.
+    const blockStart = row
+    while (row < result.length && (result[row]?.trim() ?? '').startsWith('|')) row++
+    const blockEnd = row - 1
+    if (blockEnd - blockStart < 1) continue // Need at least header + separator.
+
+    const header = result[blockStart]
+    if (!header) continue
+    const headerCells = header.split('|').filter((cell) => cell.trim() !== '').length
+    if (headerCells < 2) continue
+
+    // Find the separator row (must contain dashes).
+    let sepIdx = -1
+    for (let i = blockStart + 1; i <= blockEnd; i++) {
+      const t = result[i]?.trim() ?? ''
+      if (/^\|[\s\-:]+\|?$/.test(t) && /-/.test(t)) {
+        sepIdx = i
+        break
+      }
+    }
+
+    const makeSep = (cols: number) => `| ${Array.from({ length: cols }, () => '---').join(' | ')} |`
+
+    // Fix or insert the separator.
+    if (sepIdx >= 0) {
+      // Only replace if the existing separator has fewer than 3 dashes per column
+      // (streaming may produce `| - | - |` which markdown-it does not parse as a table).
+      const sepLine = result[sepIdx]?.trim() ?? ''
+      const sepCells = sepLine.split('|').filter((c) => c.trim() !== '')
+      const needsFix = sepCells.some((cell) => {
+        const stripped = cell.replaceAll(/[\s:]/g, '')
+        return stripped.length < 3 || !/^-+$/.test(stripped)
+      })
+      if (needsFix) result[sepIdx] = makeSep(headerCells)
+    } else {
+      result.splice(blockStart + 1, 0, makeSep(headerCells))
+      row++
+      // blockEnd shifted by the insert.
+    }
+
+    // Fix the last data row (skip if it's the separator itself).
+    const lastRow = result[blockEnd]
+    if (!lastRow) continue
+    const lastTrimmed = lastRow.trim()
+    if (!lastTrimmed.startsWith('|')) continue
+    if (/^\|[\s\-:]+\|?$/.test(lastTrimmed) && /-/.test(lastTrimmed)) continue
+
+    let fixed = lastTrimmed
+    if (!fixed.endsWith('|')) fixed = `${fixed} |`
+    const cells = fixed.split('|').filter((c) => c.trim() !== '')
+    while (cells.length < headerCells) {
+      cells.push('')
+      fixed = `${fixed}  |`
+    }
+    const indent = lastRow.match(/^\s*/)?.[0] ?? ''
+    result[blockEnd] = `${indent}${fixed}`
   }
 
-  // Build a complete separator line with N columns.
-  const makeSeparator = (columns: number): string => `| ${Array.from({ length: columns }, () => '---').join(' | ')} |`
-
-  // Fix the separator row.
-  if (separatorRow >= 0) {
-    // Replace the existing separator with a complete one (correct column count).
-    result[separatorRow] = makeSeparator(headerCells)
-  } else {
-    // No separator found — insert one right after the header.
-    result.splice(firstTableRow + 1, 0, makeSeparator(headerCells))
-    // Adjust lastTableRow index since we inserted a line.
-    lastTableRow++
-  }
-
-  // Fix the last data row (lastTableRow now points to the last line, after insert).
-  const lastLine = result[lastTableRow]
-  if (!lastLine) return result.join('\n')
-
-  // Ensure trailing | and correct column count (for content rows, not separator).
-  const trimmed = lastLine.trim()
-  if (!trimmed.startsWith('|')) return result.join('\n')
-
-  // Check if last line is itself a separator (shouldn't happen after fix, but guard).
-  if (/^\|[\s\-:]+\|?$/.test(trimmed) && /-/.test(trimmed)) {
-    // It's a separator-only block with no data rows; nothing more to fix.
-    return result.join('\n')
-  }
-
-  let fixedLine = trimmed
-  if (!fixedLine.endsWith('|')) {
-    fixedLine = `${fixedLine} |`
-  }
-
-  // Count non-empty cells in the fixed last line; pad if fewer than header.
-  const cells = fixedLine.split('|').filter((cell) => cell.trim() !== '')
-  while (cells.length < headerCells) {
-    cells.push('')
-    fixedLine = `${fixedLine}  |`
-  }
-
-  const indent = lastLine.match(/^\s*/)?.[0] ?? ''
-  result[lastTableRow] = `${indent}${fixedLine}`
   return result.join('\n')
 }
 

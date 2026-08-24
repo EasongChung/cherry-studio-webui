@@ -186,6 +186,10 @@ const App = defineComponent({
     const chatStore = useWebUiChatStore()
     const { activeRunConversationId, conversations, messages, selectedConversationId } = storeToRefs(chatStore)
     const bridgeState = ref<'checking' | 'connected' | 'offline'>('checking')
+    const bridgeRetryCount = ref(0)
+    const apiRetryState = ref<{ status: string; attempt?: number; maxRetries?: number; retryDelayMs?: number }>({
+      status: 'idle'
+    })
     const language = ref(normalizeLanguage(navigator.language))
     const languageOverride = ref(false)
     const languagePickerOpen = ref(false)
@@ -364,6 +368,9 @@ const App = defineComponent({
     const olderConversationsLoading = ref(false)
     /** Workdir groups whose conversations are fully expanded (show-more opened); collapsed groups cap at the default count. */
     const expandedConversationGroupIds = ref(new Set<string>())
+    /** Tracks whether the initial conversation load has set the collapse/expand state,
+     *  so subsequent sync-refreshes preserve the user's manual workdir-group layout. */
+    const conversationsInitiallyLoaded = ref(false)
     const showScrollToBottom = ref(false)
     const composerHeight = ref(composerDefaultHeight)
     const deleteMessageId = ref<string>()
@@ -410,9 +417,11 @@ const App = defineComponent({
     /** Assistant turns that finished streaming — ignore late text/reasoning deltas (prevents duplicate body after long thinking). */
     const sealedStreamMessageIds = new Set<string>()
     let healthTimer: number | undefined
+    let apiRetryTimer: number | undefined
     let contextUsageTimer: number | undefined
     let syncTimer: number | undefined
     let streamRefreshTimer: number | undefined
+    let reconnectVerifyTimer: number | undefined
     let chunkFrame: number | undefined
     let latestMessageRequest = 0
     let statusPreviewOpenTimer: number | undefined
@@ -1061,6 +1070,14 @@ const App = defineComponent({
             ...(updatedInput !== undefined ? { updatedInput } : {})
           }
         )
+        // Reset submitting state so the approval panel can reflect the result;
+        // subsequent SSE chunk or sync refresh will close the panel.
+        setApprovalSubmitting(message.id, tool.id, false)
+        // Force-refresh messages to clear the approval-requested state if the
+        // server-side stream chunk hasn't arrived yet.
+        if (conversationId) {
+          void loadConversationMessages(conversationId, 'refresh')
+        }
       } catch (error) {
         setApprovalSubmitting(message.id, tool.id, false)
         setApprovalError(message.id, tool.id, localizedErrorMessage(error) || text('approvalFailed'))
@@ -2694,6 +2711,14 @@ const App = defineComponent({
         label: text('runtime'),
         value: bridgeDetail.value
       },
+      ...(apiRetryState.value.status === 'retrying'
+        ? [
+            {
+              label: text('apiStatus'),
+              value: `${text('apiReconnecting')} (${apiRetryState.value.attempt ?? 0}/${apiRetryState.value.maxRetries ?? 3})`
+            }
+          ]
+        : []),
       {
         label: text('serviceStarted'),
         value: serviceStartedAt.value
@@ -2718,14 +2743,17 @@ const App = defineComponent({
       try {
         const health = await httpClient.getJson<WebUiHealthResponse>('/api/health')
         if (!languageOverride.value) language.value = normalizeLanguage(health.language)
+        bridgeRetryCount.value = 0
         bridgeState.value = health.ok ? 'connected' : 'offline'
         bridgeDetail.value = health.ok ? text('connected') : text('disconnected')
         appVersion.value = health.appVersion ?? ''
         serviceStartedAt.value = new Date(health.startedAt).toLocaleString()
         sseClientCount.value = String(health.sseClients)
       } catch (error) {
+        bridgeRetryCount.value++
         bridgeState.value = 'offline'
-        bridgeDetail.value = localizedErrorMessage(error)
+        bridgeDetail.value =
+          bridgeRetryCount.value > 1 ? `${text('disconnected')} (${bridgeRetryCount.value})` : `${text('disconnected')}`
         appVersion.value = ''
         serviceStartedAt.value = text('unavailable')
         sseClientCount.value = '0'
@@ -2771,24 +2799,8 @@ const App = defineComponent({
         // Open WebUI / after refresh: land on the newest session when nothing is selected.
         // Guard the index access: noUncheckedIndexedAccess still types [0] as possibly undefined.
         const latestConversation = conversations.value[0]
-        // Show only the newest session's workdir group (its first `conversationGroupDefaultVisibleCount`
-        // items) by default; collapse every other workdir group to its header. Not persisted, so a
-        // later load re-derives the layout from the then-newest session.
-        const latestGroupKey = latestConversation ? conversationGroupKey(latestConversation) : undefined
-        collapsedWorkdirGroupIds.value = new Set(
-          conversationGroups.value.filter((group) => group.id !== latestGroupKey).map((group) => group.id)
-        )
         if (!selectedConversationId.value && latestConversation) {
-          // Auto-open the newest session without expanding its per-group show-more footer,
-          // so a refreshed sidebar stays collapsed until the user explicitly expands it.
-          selectConversation(latestConversation.id, { reveal: false })
-        }
-        // Fill the sidebar until the viewport is full; groups beyond the default visible
-        // count stay collapsed behind their per-group "show more" footer button.
-        await nextTick()
-        const nav = conversationNav.value
-        if (olderConversationsCursor.value && nav && nav.scrollHeight <= nav.clientHeight + 8) {
-          void loadOlderConversations()
+          selectConversation(latestConversation.id)
         }
       } catch (error) {
         conversations.value = []
@@ -2798,49 +2810,8 @@ const App = defineComponent({
       }
     }
 
-    const loadOlderConversations = async () => {
-      const cursor = olderConversationsCursor.value
-      if (!cursor || olderConversationsLoading.value) return
-      if (conversations.value.length >= conversationLoadHardCap) {
-        olderConversationsCursor.value = undefined
-        return
-      }
-
-      olderConversationsLoading.value = true
-      try {
-        const query = new URLSearchParams({ limit: String(conversationPageSize), cursor })
-        const page = await httpClient.getJson<WebUiCursorResponse<WebUiAgentSessionEntity>>(
-          `/api/data/agent-sessions?${query.toString()}`
-        )
-        conversations.value = mergeConversations(conversations.value, page.items.map(toConversationSummary))
-        olderConversationsCursor.value =
-          conversations.value.length >= conversationLoadHardCap ? undefined : page.nextCursor
-        await nextTick()
-        const nav = conversationNav.value
-        // Keep filling the sidebar while older pages remain (button + scroll still work).
-        if (olderConversationsCursor.value && nav && nav.scrollHeight <= nav.clientHeight + 8) {
-          olderConversationsLoading.value = false
-          await loadOlderConversations()
-          return
-        }
-      } catch (error) {
-        conversationLoadMessage.value = localizedErrorMessage(error)
-      } finally {
-        olderConversationsLoading.value = false
-      }
-    }
-
     const updateConversationScrollState = () => {
-      const nav = conversationNav.value
-      if (!nav) return
-      // Auto-load older sessions when the user scrolls near the bottom.
-      if (
-        nav.scrollHeight - nav.scrollTop - nav.clientHeight <= 72 &&
-        olderConversationsCursor.value &&
-        !olderConversationsLoading.value
-      ) {
-        void loadOlderConversations()
-      }
+      // Scroll state tracking for potential future use (no auto-load)
     }
 
     const mergeMessages = (
@@ -2848,8 +2819,90 @@ const App = defineComponent({
       incoming: readonly WebUiMessageSnapshot[]
     ): readonly WebUiMessageSnapshot[] => {
       const byId = new Map(current.map((message) => [message.id, message]))
-      for (const message of incoming) byId.set(message.id, message)
+      for (const message of incoming) {
+        const existing = byId.get(message.id)
+        if (!existing) {
+          byId.set(message.id, message)
+          continue
+        }
+        // Prefer the richer of two sides when one is a pending accumulation and the
+        // other is a pre-persistence placeholder (the DB only writes `parts` at the
+        // end of the stream).  A terminal row that carries content is authoritative
+        // and must not be overwritten by a stale pending snapshot (page-refresh cache).
+        if (
+          existing.status !== 'pending' &&
+          (existing.content.length > 0 || existing.reasoning !== undefined) &&
+          message.status === 'pending'
+        )
+          continue
+        if (
+          existing.status === 'pending' &&
+          message.status !== 'pending' &&
+          message.content.length === 0 &&
+          message.reasoning === undefined
+        )
+          continue
+        // Both sides are pending: the SSE accumulation (existing) has content/reasoning
+        // built up in memory, while the DB row returned on refresh is the pre-persistence
+        // placeholder (empty content, no reasoning). Keep the richer in-memory snapshot.
+        if (
+          existing.status === 'pending' &&
+          message.status === 'pending' &&
+          (existing.content.length > 0 || existing.reasoning !== undefined) &&
+          message.content.length === 0 &&
+          message.reasoning === undefined
+        )
+          continue
+        byId.set(message.id, message)
+      }
       return [...byId.values()].sort((left, right) => Date.parse(left.createdAt) - Date.parse(right.createdAt))
+    }
+
+    /** Save in-memory pending snapshots before the page unloads so a refresh
+     *  can recover the SSE accumulation the server has not yet persisted. */
+    const savePendingSnapshots = () => {
+      try {
+        const conversationId = selectedConversationId.value
+        if (!conversationId) return
+        const pending = messages.value.filter((m) => m.status === 'pending')
+        if (pending.length === 0) {
+          window.sessionStorage.removeItem(`webui-pending:${conversationId}`)
+          return
+        }
+        window.sessionStorage.setItem(`webui-pending:${conversationId}`, JSON.stringify(pending))
+      } catch {
+        /* cache is best-effort */
+      }
+    }
+
+    /** Restore any cached pending snapshots for the given conversation. */
+    const restoreCachedSnapshots = (conversationId: string): readonly WebUiMessageSnapshot[] => {
+      try {
+        const raw = window.sessionStorage.getItem(`webui-pending:${conversationId}`)
+        if (!raw) return []
+        return JSON.parse(raw) as WebUiMessageSnapshot[]
+      } catch {
+        return []
+      }
+    }
+
+    /** Desktop notification when a reply that ran ≥3 minutes finishes while the page is in the background. */
+    const notifyTaskComplete = (messageId?: string) => {
+      if (typeof window === 'undefined' || !('Notification' in window)) return
+      if (document.visibilityState === 'visible') return
+      // Only alert for genuinely long-running turns so short replies don't spam the user.
+      const message = messageId ? messages.value.find((m) => m.id === messageId) : undefined
+      const startedAt = message ? Date.parse(message.createdAt) : NaN
+      if (!Number.isFinite(startedAt) || Date.now() - startedAt < 180_000) return
+      if (Notification.permission === 'granted') {
+        new Notification(text('taskCompleteTitle'), { body: text('taskCompleteBody') })
+      } else if (Notification.permission === 'default') {
+        void Notification.requestPermission().then((permission) => {
+          if (permission === 'granted') {
+            new Notification(text('taskCompleteTitle'), { body: text('taskCompleteBody') })
+          }
+        })
+      }
     }
 
     const loadConversationMessages = async (conversationId: string, mode: 'replace' | 'refresh' = 'replace') => {
@@ -2867,7 +2920,10 @@ const App = defineComponent({
         if (requestId !== latestMessageRequest || selectedConversationId.value !== conversationId) return
 
         const latest = page.items.map(toMessageSnapshot).reverse()
-        messages.value = mode === 'replace' ? latest : mergeMessages(messages.value, latest)
+        messages.value =
+          mode === 'replace'
+            ? mergeMessages(latest, restoreCachedSnapshots(conversationId))
+            : mergeMessages(messages.value, latest)
         if (mode === 'replace') olderMessagesCursor.value = page.nextCursor
         messageLoadState.value = 'ready'
         messageLoadMessage.value = messages.value.length ? '' : text('emptyConversation')
@@ -3057,6 +3113,18 @@ const App = defineComponent({
         .catch(() => {
           if (selectedConversationId.value === conversationId) contextUsage.value = null
         })
+      // WebUI desktop bridge: poll the API retry state for the active session
+      // so the status panel can show a "Retrying…" indicator when the provider is backing off.
+      void httpClient
+        .getJson<{ retry: { status: string; attempt?: number; maxRetries?: number; retryDelayMs?: number } }>(
+          `/api/webui/api-retry/${encodeURIComponent(conversationId)}`
+        )
+        .then((response) => {
+          if (selectedConversationId.value === conversationId) apiRetryState.value = response.retry
+        })
+        .catch(() => {
+          if (selectedConversationId.value === conversationId) apiRetryState.value = { status: 'idle' }
+        })
     }
 
     const refreshSlashCommands = (conversationId = selectedConversationId.value) => {
@@ -3094,17 +3162,11 @@ const App = defineComponent({
         })
     }
 
-    const selectConversation = (conversationId: string, options?: { reveal?: boolean }) => {
+    const selectConversation = (conversationId: string) => {
       clearStatusPreviewTimers()
       closeConversationMenu()
       statusPreviewOpen.value = false
       const target = conversations.value.find((conversation) => conversation.id === conversationId)
-      if (target) {
-        expandWorkdirGroup(conversationGroupKey(target))
-        // Ensure a selected session hidden behind a collapsed group footer is revealed,
-        // unless the caller opted out (auto-open after refresh must not expand the group).
-        if (options?.reveal !== false) expandConversationGroup(conversationGroupKey(target))
-      }
       if (conversationId === selectedConversationId.value) {
         mobileSidebarOpen.value = false
         void loadConversationMessages(conversationId, 'refresh')
@@ -4525,15 +4587,25 @@ const App = defineComponent({
       }
     }
 
-    /** Persist updated pinned tool order back to the desktop preference. */
+    /** Persist updated pinned tool order back to the desktop preference.
+     * Writes to both chat and agent sets — the WebUI has a single composer
+     * so the two sets are kept in sync here. */
     const savePinnedTools = async (pinnedIds: readonly string[]) => {
       chatInputPinnedTools.value = pinnedIds
+      agentInputPinnedTools.value = pinnedIds
       try {
-        await httpClient.putJson('/api/webui/preferences', { chatInputPinnedTools: pinnedIds })
+        await httpClient.putJson('/api/webui/preferences', {
+          chatInputPinnedTools: pinnedIds,
+          agentInputPinnedTools: pinnedIds
+        })
       } catch {
         // silently ignore — the local state is already updated for the session.
       }
     }
+
+    /** Returns true when a tool id is pinned in either the chat or agent toolbar set. */
+    const isPinnedTool = (toolId: string) =>
+      chatInputPinnedTools.value.includes(toolId) || agentInputPinnedTools.value.includes(toolId)
 
     /**
      * One row of the composer tool launcher, mirroring the desktop
@@ -4746,20 +4818,31 @@ const App = defineComponent({
           { id: 'compact', labelKey: 'compact' },
           { id: 'fastMode', labelKey: 'fastMode' }
         ]
-        return pinableTools.map((tool) => ({
-          id: `pin:${tool.id}`,
-          label: text(tool.labelKey),
-          suffix: chatInputPinnedTools.value.includes(tool.id) ? text('quickPanelPinned') : undefined,
-          section: 'resources' as const,
-          action: () => {
-            const current = chatInputPinnedTools.value
-            if (current.includes(tool.id)) {
-              void savePinnedTools(current.filter((id) => id !== tool.id))
-            } else {
-              void savePinnedTools([...current, tool.id])
+        return pinableTools.map((tool) => {
+          const pinnedInChat = chatInputPinnedTools.value.includes(tool.id)
+          const pinnedInAgent = agentInputPinnedTools.value.includes(tool.id)
+          const pinnedText =
+            pinnedInChat && pinnedInAgent
+              ? text('quickPanelPinned')
+              : pinnedInChat
+                ? text('quickPanelPinned')
+                : pinnedInAgent
+                  ? text('quickPanelPinned')
+                  : undefined
+          return {
+            id: `pin:${tool.id}`,
+            label: text(tool.labelKey),
+            suffix: pinnedText,
+            section: 'resources' as const,
+            action: () => {
+              // Toggle in both sets to keep them in sync.
+              const nextChat = chatInputPinnedTools.value.includes(tool.id)
+                ? chatInputPinnedTools.value.filter((id) => id !== tool.id)
+                : [...chatInputPinnedTools.value, tool.id]
+              void savePinnedTools(nextChat)
             }
           }
-        }))
+        })
       }
 
       return []
@@ -4830,6 +4913,24 @@ const App = defineComponent({
       })
       sseClient.connect()
       if (!healthTimer) healthTimer = window.setInterval(() => void refreshHealth(), 15_000)
+      // Poll the API retry state every 1 s so the header can show a
+      // "Reconnecting…" indicator with minimal lag when the provider is backing off.
+      if (!apiRetryTimer) {
+        apiRetryTimer = window.setInterval(() => {
+          const conversationId = selectedConversationId.value
+          if (!conversationId) return
+          void httpClient
+            .getJson<{ retry: { status: string; attempt?: number; maxRetries?: number } }>(
+              `/api/webui/api-retry/${encodeURIComponent(conversationId)}`
+            )
+            .then((response) => {
+              if (selectedConversationId.value === conversationId) apiRetryState.value = response.retry
+            })
+            .catch(() => {
+              if (selectedConversationId.value === conversationId) apiRetryState.value = { status: 'idle' }
+            })
+        }, 1000)
+      }
     }
 
     const applyThemeMode = () => {
@@ -4904,6 +5005,7 @@ const App = defineComponent({
       if (pendingSubmittedTurnCount.value === 0 && conversationId === activeRunConversationId.value) {
         activeRunConversationId.value = undefined
       }
+      notifyTaskComplete(data?.messageId)
       if (conversationId && conversationId === selectedConversationId.value) {
         // Capture before refresh: only pin if the user was still near the bottom.
         const wasNearBottom = !showScrollToBottom.value
@@ -4935,9 +5037,48 @@ const App = defineComponent({
       }
     })
 
+    const unsubscribeReady = sseClient.subscribe('ready', () => {
+      // SSE reconnected after a disconnect (mobile lock screen, background tab, network drop).
+      // The `done`/`sync` events broadcast during the offline gap are lost, so the message
+      // stays `pending` in memory. Verify the DB state after a short debounce.
+      if (bridgeState.value === 'offline') {
+        bridgeState.value = 'connected'
+        bridgeDetail.value = text('connected')
+      }
+      if (reconnectVerifyTimer !== undefined) window.clearTimeout(reconnectVerifyTimer)
+      reconnectVerifyTimer = window.setTimeout(() => {
+        reconnectVerifyTimer = undefined
+        const conversationId = selectedConversationId.value
+        if (!conversationId) return
+        if (messages.value.some((m) => m.status === 'pending')) {
+          // Refresh the DB state first so the message rows are authoritative,
+          // then replay cached stream chunks on top to restore in-flight
+          // process info (contentBlocks, processGroups, toolCalls).
+          void loadConversationMessages(conversationId, 'refresh').finally(() => {
+            void httpClient
+              .getJson<{
+                chunks: Array<{ conversationId: string; messageId: string; chunk: WebUiChunkPayload['chunk'] }>
+              }>(`/api/webui/stream-cache/${encodeURIComponent(conversationId)}`)
+              .then((response) => {
+                if (!response.chunks || response.chunks.length === 0) return
+                for (const entry of response.chunks) {
+                  if (entry.conversationId === conversationId) {
+                    queueStreamChunk({ conversationId, messageId: entry.messageId, chunk: entry.chunk })
+                  }
+                }
+              })
+              .catch(() => {
+                /* cache empty or unavailable */
+              })
+          })
+        }
+      }, 3000)
+    })
+
     onMounted(() => {
       applyThemeMode()
       document.addEventListener('pointerdown', handlePopoverOutsidePointerDown)
+      window.addEventListener('beforeunload', savePendingSnapshots)
       processElapsedTimer = window.setInterval(() => {
         if (isCurrentlyStreaming.value) processElapsedTick.value += 1
       }, 1000)
@@ -4995,14 +5136,17 @@ const App = defineComponent({
       clearStatusPreviewTimers()
       saveComposerDraft()
       document.removeEventListener('pointerdown', handlePopoverOutsidePointerDown)
+      window.removeEventListener('beforeunload', savePendingSnapshots)
       if (bottomWheelSettleTimer !== undefined) window.clearTimeout(bottomWheelSettleTimer)
       if (workspaceFileSearchTimer !== undefined) window.clearTimeout(workspaceFileSearchTimer)
       releaseWorkspacePreview()
       if (healthTimer) window.clearInterval(healthTimer)
+      if (apiRetryTimer) window.clearInterval(apiRetryTimer)
       if (contextUsageTimer) window.clearInterval(contextUsageTimer)
       if (processElapsedTimer !== undefined) window.clearInterval(processElapsedTimer)
       if (syncTimer) window.clearTimeout(syncTimer)
       if (streamRefreshTimer !== undefined) window.clearTimeout(streamRefreshTimer)
+      if (reconnectVerifyTimer !== undefined) window.clearTimeout(reconnectVerifyTimer)
       if (chunkFrame !== undefined) window.cancelAnimationFrame(chunkFrame)
       clearPendingStreamChunks()
       sealedStreamMessageIds.clear()
@@ -5011,6 +5155,7 @@ const App = defineComponent({
       unsubscribeChunk()
       unsubscribeDone()
       unsubscribeError()
+      unsubscribeReady()
       sseClient.close()
       delete document.documentElement.dataset.webuiTheme
       compactHeaderMql.removeEventListener('change', onCompactHeaderChange)
@@ -5730,6 +5875,17 @@ const App = defineComponent({
                             ` · ${submitError.value}`
                           )
                         : undefined,
+                      apiRetryState.value.status === 'retrying'
+                        ? h(
+                            'span',
+                            {
+                              class: 'chat-header-status-alert chat-header-status-reconnecting',
+                              role: 'status',
+                              title: `${text('apiReconnecting')} (${apiRetryState.value.attempt ?? 0}/${apiRetryState.value.maxRetries ?? 3})`
+                            },
+                            ` · ${text('apiReconnecting')}`
+                          )
+                        : undefined,
                       conversationLoadState.value === 'loading' || messageLoadState.value === 'loading'
                         ? h(
                             'span',
@@ -6237,7 +6393,7 @@ const App = defineComponent({
                             renderComposerToolIcon('permission')
                           ),
                           // Conditionally rendered tools: only show when pinned in the quick panel.
-                          chatInputPinnedTools.value.includes('skill')
+                          isPinnedTool('skill')
                             ? h(
                                 'button',
                                 {
@@ -6264,7 +6420,7 @@ const App = defineComponent({
                                 renderComposerToolIcon('skill')
                               )
                             : undefined,
-                          chatInputPinnedTools.value.includes('knowledge')
+                          isPinnedTool('knowledge')
                             ? h(
                                 'button',
                                 {
@@ -6291,7 +6447,7 @@ const App = defineComponent({
                                 renderComposerToolIcon('knowledge')
                               )
                             : undefined,
-                          chatInputPinnedTools.value.includes('compact')
+                          isPinnedTool('compact')
                             ? h(
                                 'button',
                                 {
@@ -6314,7 +6470,7 @@ const App = defineComponent({
                                 renderComposerToolIcon('compact')
                               )
                             : undefined,
-                          chatInputPinnedTools.value.includes('fastMode')
+                          isPinnedTool('fastMode')
                             ? h(
                                 'button',
                                 {
