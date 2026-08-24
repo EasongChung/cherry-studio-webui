@@ -206,6 +206,7 @@ const readableDataApiPatterns = [
   /^\/models(?:$|\/)/,
   /^\/providers(?:$|\/)/,
   /^\/prompts(?:$|\/)/,
+  /^\/mcp-servers(?:$|\/)/,
   /^\/agent-workspaces$/,
   /^\/agent-sessions$/,
   /^\/agent-sessions\/latest$/,
@@ -228,7 +229,9 @@ const writableDataApiPatterns = [
   { pattern: /^\/models:batch$/, methods: ['POST'] },
   { pattern: /^\/models\/[^/]+$/, methods: ['PATCH', 'PUT', 'DELETE'] },
   { pattern: /^\/prompts$/, methods: ['POST'] },
-  { pattern: /^\/prompts\/[^/]+$/, methods: ['PATCH', 'DELETE'] }
+  { pattern: /^\/prompts\/[^/]+$/, methods: ['PATCH', 'DELETE'] },
+  { pattern: /^\/mcp-servers\/[^/]+$/, methods: ['PATCH', 'DELETE'] },
+  { pattern: /^\/skills\/[^/]+$/, methods: ['PATCH'] }
 ] as const
 
 const isAllowedDataApiWritePath = (method: string, path: string) =>
@@ -630,7 +633,9 @@ const handleDataApiProxy = async (
       } else if (
         dataPath.startsWith('/providers') ||
         dataPath.startsWith('/models') ||
-        dataPath.startsWith('/prompts')
+        dataPath.startsWith('/prompts') ||
+        dataPath.startsWith('/mcp-servers') ||
+        dataPath.startsWith('/skills')
       ) {
         sseRelay.broadcast({ event: 'sync', data: { reason: 'settings-updated' } })
       }

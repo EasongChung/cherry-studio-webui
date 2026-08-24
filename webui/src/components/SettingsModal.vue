@@ -1,12 +1,12 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import type { createWebUiHttpClient } from '../service/httpClient'
-import { fallbackLanguage, type webUiLanguages } from '../utils/constants'
+import { fallbackLanguage } from '../utils/constants'
 import { type TextKey, textPacks } from '../utils/textPacks'
 
 export type SettingsTabId = 'providers' | 'prompts' | 'mcp' | 'preferences'
-export type WebUiLanguageId = (typeof webUiLanguages)[number]['id']
 
+// --- Providers & Models Types ---
 interface ProviderEndpointConfig {
   baseUrl?: string
   url?: string
@@ -38,6 +38,36 @@ interface ModelEntity {
   isEnabled?: boolean
 }
 
+// --- Prompts Types ---
+interface PromptEntity {
+  id: string
+  title: string
+  content: string
+  visibility?: 'global' | 'restricted'
+  createdAt?: string
+}
+
+// --- MCP & Skills Types ---
+interface McpServerEntity {
+  id: string
+  name: string
+  type: 'stdio' | 'sse' | 'streamableHttp'
+  description?: string | null
+  command?: string | null
+  baseUrl?: string | null
+  isActive?: boolean
+}
+
+interface SkillEntity {
+  id: string
+  name: string
+  description?: string | null
+  source?: string
+  isGlobalEnabled?: boolean
+  isEnabled?: boolean
+}
+
+// --- Preferences Types ---
 interface WebUiPreferences {
   showEstimatedTokens?: boolean
   thoughtAutoCollapse?: boolean
@@ -61,7 +91,20 @@ const text = (key: TextKey) => {
   return textPacks[langKey]?.[key] ?? textPacks[fallbackLanguage][key]
 }
 
-// --- Providers & Models State ---
+// Toast feedback
+const toastMessage = ref('')
+let toastTimer: number | undefined
+const showToast = (msg: string) => {
+  toastMessage.value = msg
+  if (toastTimer) window.clearTimeout(toastTimer)
+  toastTimer = window.setTimeout(() => {
+    toastMessage.value = ''
+  }, 2500)
+}
+
+// ==========================================
+// 1. Providers & Models Management
+// ==========================================
 const providers = ref<ProviderEntity[]>([])
 const models = ref<ModelEntity[]>([])
 const selectedProviderId = ref<string>('')
@@ -75,7 +118,6 @@ const testConnectionState = ref<{
   message?: string
 }>({ loading: false })
 
-// Editing Provider state
 const editProviderName = ref('')
 const editBaseUrl = ref('')
 const editApiKey = ref('')
@@ -83,35 +125,11 @@ const isApiKeyDirty = ref(false)
 const showApiKeyPlain = ref(false)
 const editIsEnabled = ref(true)
 
-// Add Custom Model form state
 const showAddModelForm = ref(false)
 const newModelId = ref('')
 const newModelName = ref('')
 const isAddingModel = ref(false)
-
-// Pull Models state
 const isPullingModels = ref(false)
-
-// --- Preferences State ---
-const preferences = ref<{
-  showEstimatedTokens: boolean
-  thoughtAutoCollapse: boolean
-}>({
-  showEstimatedTokens: false,
-  thoughtAutoCollapse: false
-})
-const isSavingPreferences = ref(false)
-
-// Toast feedback
-const toastMessage = ref('')
-let toastTimer: number | undefined
-const showToast = (msg: string) => {
-  toastMessage.value = msg
-  if (toastTimer) window.clearTimeout(toastTimer)
-  toastTimer = window.setTimeout(() => {
-    toastMessage.value = ''
-  }, 2500)
-}
 
 const filteredProviders = computed(() => {
   const query = providerSearchQuery.value.trim().toLowerCase()
@@ -130,7 +148,6 @@ const currentProviderModels = computed(() => {
   return models.value.filter((m) => m.providerId === selectedProviderId.value)
 })
 
-// Load Providers from DataApi
 const loadProviders = async () => {
   isLoadingProviders.value = true
   try {
@@ -146,28 +163,12 @@ const loadProviders = async () => {
   }
 }
 
-// Load Models from DataApi
 const loadModels = async () => {
   try {
     const list = await props.httpClient.getJson<ModelEntity[]>('/api/data/models')
     models.value = Array.isArray(list) ? list : []
   } catch (err) {
     console.error('Failed to load models:', err)
-  }
-}
-
-// Load Preferences
-const loadPreferences = async () => {
-  try {
-    const data = await props.httpClient.getJson<WebUiPreferences>('/api/webui/preferences')
-    if (data) {
-      preferences.value = {
-        showEstimatedTokens: Boolean(data.showEstimatedTokens),
-        thoughtAutoCollapse: Boolean(data.thoughtAutoCollapse)
-      }
-    }
-  } catch (err) {
-    console.error('Failed to load preferences:', err)
   }
 }
 
@@ -201,7 +202,6 @@ const onApiKeyInput = () => {
   isApiKeyDirty.value = true
 }
 
-// Save Provider Details
 const saveProviderDetails = async () => {
   if (!selectedProvider.value) return
   isSavingProvider.value = true
@@ -216,14 +216,12 @@ const saveProviderDetails = async () => {
       }
     }
 
-    // 1. Update Provider metadata
     await props.httpClient.patchJson(`/api/data/providers/${p.id}`, {
       name: editProviderName.value.trim() || p.name,
       isEnabled: editIsEnabled.value,
       endpointConfigs
     })
 
-    // 2. Update API Key if dirty
     if (isApiKeyDirty.value && editApiKey.value.trim()) {
       const rawKey = editApiKey.value.trim()
       await props.httpClient.postJson(`/api/data/providers/${p.id}/api-keys`, {
@@ -242,7 +240,6 @@ const saveProviderDetails = async () => {
   }
 }
 
-// Toggle Provider Enabled
 const toggleProviderEnabled = async (p: ProviderEntity) => {
   const nextVal = p.isEnabled === false
   try {
@@ -259,7 +256,6 @@ const toggleProviderEnabled = async (p: ProviderEntity) => {
   }
 }
 
-// Test Connection
 const testConnection = async () => {
   if (!selectedProvider.value) return
   testConnectionState.value = { loading: true }
@@ -298,7 +294,6 @@ const testConnection = async () => {
   }
 }
 
-// Pull / Resolve Models from provider
 const pullModels = async () => {
   if (!selectedProvider.value) return
   const currentPid = selectedProvider.value.id
@@ -328,7 +323,6 @@ const pullModels = async () => {
   }
 }
 
-// Toggle Model Enabled
 const toggleModelEnabled = async (m: ModelEntity) => {
   const nextVal = m.isEnabled === false
   try {
@@ -342,7 +336,6 @@ const toggleModelEnabled = async (m: ModelEntity) => {
   }
 }
 
-// Add Custom Model
 const addCustomModel = async () => {
   if (!selectedProvider.value || !newModelId.value.trim()) return
   isAddingModel.value = true
@@ -367,7 +360,203 @@ const addCustomModel = async () => {
   }
 }
 
-// Save Preferences
+// ==========================================
+// 2. Prompts Management
+// ==========================================
+const prompts = ref<PromptEntity[]>([])
+const promptSearchQuery = ref('')
+const selectedPromptId = ref<string>('')
+const isLoadingPrompts = ref(false)
+const isSavingPrompt = ref(false)
+const showNewPromptDrawer = ref(false)
+
+const editPromptTitle = ref('')
+const editPromptContent = ref('')
+
+const filteredPrompts = computed(() => {
+  const q = promptSearchQuery.value.trim().toLowerCase()
+  if (!q) return prompts.value
+  return prompts.value.filter(
+    (p) => p.title.toLowerCase().includes(q) || p.content.toLowerCase().includes(q)
+  )
+})
+
+const selectedPrompt = computed(() => {
+  return prompts.value.find((p) => p.id === selectedPromptId.value)
+})
+
+const loadPrompts = async () => {
+  isLoadingPrompts.value = true
+  try {
+    const list = await props.httpClient.getJson<PromptEntity[]>('/api/data/prompts')
+    prompts.value = Array.isArray(list) ? list : []
+    if (prompts.value.length > 0 && !selectedPromptId.value && prompts.value[0]) {
+      selectPrompt(prompts.value[0].id)
+    }
+  } catch (err) {
+    console.error('Failed to load prompts:', err)
+  } finally {
+    isLoadingPrompts.value = false
+  }
+}
+
+const selectPrompt = (id: string) => {
+  selectedPromptId.value = id
+  showNewPromptDrawer.value = false
+  const p = prompts.value.find((item) => item.id === id)
+  if (p) {
+    editPromptTitle.value = p.title || ''
+    editPromptContent.value = p.content || ''
+  }
+}
+
+const savePrompt = async () => {
+  if (!selectedPrompt.value || !editPromptTitle.value.trim()) return
+  isSavingPrompt.value = true
+  try {
+    await props.httpClient.patchJson(`/api/data/prompts/${encodeURIComponent(selectedPrompt.value.id)}`, {
+      title: editPromptTitle.value.trim(),
+      content: editPromptContent.value.trim()
+    })
+    await loadPrompts()
+    selectPrompt(selectedPrompt.value.id)
+    showToast(text('promptSaved'))
+    emit('settingsChanged')
+  } catch (err: unknown) {
+    showToast(err instanceof Error ? err.message : 'Save prompt failed')
+  } finally {
+    isSavingPrompt.value = false
+  }
+}
+
+const openNewPrompt = () => {
+  showNewPromptDrawer.value = true
+  selectedPromptId.value = ''
+  editPromptTitle.value = ''
+  editPromptContent.value = ''
+}
+
+const createPrompt = async () => {
+  if (!editPromptTitle.value.trim() || !editPromptContent.value.trim()) return
+  isSavingPrompt.value = true
+  try {
+    const created = await props.httpClient.postJson<PromptEntity>('/api/data/prompts', {
+      title: editPromptTitle.value.trim(),
+      content: editPromptContent.value.trim(),
+      visibility: 'global'
+    })
+    showNewPromptDrawer.value = false
+    await loadPrompts()
+    if (created?.id) {
+      selectPrompt(created.id)
+    }
+    showToast(text('promptCreated'))
+    emit('settingsChanged')
+  } catch (err: unknown) {
+    showToast(err instanceof Error ? err.message : 'Create prompt failed')
+  } finally {
+    isSavingPrompt.value = false
+  }
+}
+
+const deletePrompt = async (id: string) => {
+  try {
+    await props.httpClient.deleteJson(`/api/data/prompts/${encodeURIComponent(id)}`)
+    selectedPromptId.value = ''
+    await loadPrompts()
+    showToast(text('promptDeleted'))
+    emit('settingsChanged')
+  } catch (err: unknown) {
+    showToast(err instanceof Error ? err.message : 'Delete prompt failed')
+  }
+}
+
+// ==========================================
+// 3. MCP & Skills Management
+// ==========================================
+const mcpServers = ref<McpServerEntity[]>([])
+const skillsList = ref<SkillEntity[]>([])
+const isLoadingMcp = ref(false)
+const isLoadingSkills = ref(false)
+
+const loadMcpServers = async () => {
+  isLoadingMcp.value = true
+  try {
+    const list = await props.httpClient.getJson<McpServerEntity[]>('/api/data/mcp-servers')
+    mcpServers.value = Array.isArray(list) ? list : []
+  } catch (err) {
+    console.error('Failed to load MCP servers:', err)
+  } finally {
+    isLoadingMcp.value = false
+  }
+}
+
+const loadSkills = async () => {
+  isLoadingSkills.value = true
+  try {
+    const list = await props.httpClient.getJson<SkillEntity[]>('/api/data/skills')
+    skillsList.value = Array.isArray(list) ? list : []
+  } catch (err) {
+    console.error('Failed to load skills:', err)
+  } finally {
+    isLoadingSkills.value = false
+  }
+}
+
+const toggleMcpServer = async (server: McpServerEntity) => {
+  const nextVal = server.isActive === false
+  try {
+    await props.httpClient.patchJson(`/api/data/mcp-servers/${encodeURIComponent(server.id)}`, {
+      isActive: nextVal
+    })
+    server.isActive = nextVal
+    showToast(nextVal ? text('mcpServerEnabled') : text('mcpServerDisabled'))
+    emit('settingsChanged')
+  } catch (err: unknown) {
+    showToast(err instanceof Error ? err.message : 'Update MCP server failed')
+  }
+}
+
+const toggleSkill = async (skill: SkillEntity) => {
+  const nextVal = skill.isGlobalEnabled === false
+  try {
+    await props.httpClient.patchJson(`/api/data/skills/${encodeURIComponent(skill.id)}`, {
+      isGlobalEnabled: nextVal
+    })
+    skill.isGlobalEnabled = nextVal
+    showToast(nextVal ? text('skillEnabled') : text('skillDisabled'))
+    emit('settingsChanged')
+  } catch (err: unknown) {
+    showToast(err instanceof Error ? err.message : 'Update skill failed')
+  }
+}
+
+// ==========================================
+// 4. Preferences Management
+// ==========================================
+const preferences = ref<{
+  showEstimatedTokens: boolean
+  thoughtAutoCollapse: boolean
+}>({
+  showEstimatedTokens: false,
+  thoughtAutoCollapse: false
+})
+const isSavingPreferences = ref(false)
+
+const loadPreferences = async () => {
+  try {
+    const data = await props.httpClient.getJson<WebUiPreferences>('/api/webui/preferences')
+    if (data) {
+      preferences.value = {
+        showEstimatedTokens: Boolean(data.showEstimatedTokens),
+        thoughtAutoCollapse: Boolean(data.thoughtAutoCollapse)
+      }
+    }
+  } catch (err) {
+    console.error('Failed to load preferences:', err)
+  }
+}
+
 const togglePreference = async (key: 'thoughtAutoCollapse' | 'showEstimatedTokens') => {
   preferences.value[key] = !preferences.value[key]
   isSavingPreferences.value = true
@@ -387,6 +576,9 @@ const togglePreference = async (key: 'thoughtAutoCollapse' | 'showEstimatedToken
 onMounted(() => {
   loadProviders()
   loadModels()
+  loadPrompts()
+  loadMcpServers()
+  loadSkills()
   loadPreferences()
 })
 </script>
@@ -422,6 +614,24 @@ onMounted(() => {
           </button>
           <button
             class="settings-nav-item"
+            :class="{ 'settings-nav-item-active': currentTab === 'prompts' }"
+            type="button"
+            @click="currentTab = 'prompts'"
+          >
+            <span class="settings-nav-icon">📝</span>
+            <span>{{ text('promptsLibrary') }}</span>
+          </button>
+          <button
+            class="settings-nav-item"
+            :class="{ 'settings-nav-item-active': currentTab === 'mcp' }"
+            type="button"
+            @click="currentTab = 'mcp'"
+          >
+            <span class="settings-nav-icon">🧩</span>
+            <span>{{ text('mcpAndSkills') }}</span>
+          </button>
+          <button
+            class="settings-nav-item"
             :class="{ 'settings-nav-item-active': currentTab === 'preferences' }"
             type="button"
             @click="currentTab = 'preferences'"
@@ -441,7 +651,6 @@ onMounted(() => {
           <!-- TAB 1: Providers & Models -->
           <div v-if="currentTab === 'providers'" class="settings-tab-pane">
             <div class="providers-layout">
-              <!-- Left: Providers List -->
               <aside class="providers-sidebar">
                 <div class="providers-search-wrap">
                   <input
@@ -478,7 +687,6 @@ onMounted(() => {
                 </div>
               </aside>
 
-              <!-- Right: Selected Provider Details -->
               <section v-if="selectedProvider" class="provider-details-panel">
                 <div class="panel-section-header">
                   <h3>{{ selectedProvider.name || selectedProvider.id }}</h3>
@@ -494,7 +702,6 @@ onMounted(() => {
                   </div>
                 </div>
 
-                <!-- Form fields -->
                 <div class="settings-form-grid">
                   <div class="settings-form-row">
                     <label class="settings-label">{{ text('providerName') }}</label>
@@ -536,7 +743,6 @@ onMounted(() => {
                     </div>
                   </div>
 
-                  <!-- Test connection button & output -->
                   <div class="settings-form-row test-connection-row">
                     <button
                       class="settings-btn settings-btn-secondary"
@@ -557,7 +763,6 @@ onMounted(() => {
                   </div>
                 </div>
 
-                <!-- Models Section -->
                 <div class="models-section">
                   <div class="models-section-header">
                     <h4>{{ text('modelList') }} ({{ currentProviderModels.length }})</h4>
@@ -580,7 +785,6 @@ onMounted(() => {
                     </div>
                   </div>
 
-                  <!-- Add Model Form -->
                   <div v-if="showAddModelForm" class="add-model-inline-form">
                     <input
                       v-model="newModelId"
@@ -604,7 +808,6 @@ onMounted(() => {
                     </button>
                   </div>
 
-                  <!-- Models List Table -->
                   <div class="models-table-wrap">
                     <div
                       v-for="m in currentProviderModels"
@@ -633,7 +836,153 @@ onMounted(() => {
             </div>
           </div>
 
-          <!-- TAB 2: Preferences -->
+          <!-- TAB 2: Prompts Library -->
+          <div v-if="currentTab === 'prompts'" class="settings-tab-pane">
+            <div class="prompts-layout">
+              <aside class="prompts-sidebar">
+                <div class="prompts-search-wrap">
+                  <input
+                    v-model="promptSearchQuery"
+                    class="settings-input settings-search-input"
+                    type="search"
+                    :placeholder="text('searchPrompts')"
+                  />
+                  <button class="settings-btn settings-btn-sm settings-btn-primary" type="button" @click="openNewPrompt">
+                    + {{ text('newPrompt') }}
+                  </button>
+                </div>
+                <div class="prompts-list">
+                  <div
+                    v-for="pr in filteredPrompts"
+                    :key="pr.id"
+                    class="prompt-list-item"
+                    :class="{ 'prompt-list-item-selected': pr.id === selectedPromptId && !showNewPromptDrawer }"
+                    @click="selectPrompt(pr.id)"
+                  >
+                    <div class="prompt-item-info">
+                      <span class="prompt-item-title">{{ pr.title }}</span>
+                      <span class="prompt-item-snippet">{{ pr.content.slice(0, 50) }}</span>
+                    </div>
+                  </div>
+                  <div v-if="filteredPrompts.length === 0" class="settings-empty-hint">
+                    {{ text('noPromptsFound') }}
+                  </div>
+                </div>
+              </aside>
+
+              <section class="prompt-details-panel">
+                <div v-if="showNewPromptDrawer || selectedPrompt" class="prompt-form-wrap">
+                  <div class="panel-section-header">
+                    <h3>{{ showNewPromptDrawer ? text('newPrompt') : text('editPrompt') }}</h3>
+                    <div class="section-actions">
+                      <button
+                        v-if="!showNewPromptDrawer && selectedPrompt"
+                        class="settings-btn settings-btn-sm settings-btn-danger"
+                        type="button"
+                        @click="deletePrompt(selectedPrompt.id)"
+                      >
+                        {{ text('delete') }}
+                      </button>
+                      <button
+                        class="settings-btn settings-btn-primary"
+                        type="button"
+                        :disabled="isSavingPrompt || !editPromptTitle.trim() || !editPromptContent.trim()"
+                        @click="showNewPromptDrawer ? createPrompt() : savePrompt()"
+                      >
+                        {{ isSavingPrompt ? text('saving') : text('save') }}
+                      </button>
+                    </div>
+                  </div>
+
+                  <div class="settings-form-grid">
+                    <div class="settings-form-row">
+                      <label class="settings-label">{{ text('promptTitle') }}</label>
+                      <input
+                        v-model="editPromptTitle"
+                        class="settings-input"
+                        type="text"
+                        :placeholder="text('promptTitlePlaceholder')"
+                      />
+                    </div>
+                    <div class="settings-form-row">
+                      <label class="settings-label">{{ text('promptContent') }}</label>
+                      <textarea
+                        v-model="editPromptContent"
+                        class="settings-textarea"
+                        rows="8"
+                        :placeholder="text('promptContentPlaceholder')"
+                      />
+                    </div>
+                  </div>
+                </div>
+                <div v-else class="settings-empty-hint-large">
+                  {{ text('selectPromptToEdit') }}
+                </div>
+              </section>
+            </div>
+          </div>
+
+          <!-- TAB 3: MCP & Skills -->
+          <div v-if="currentTab === 'mcp'" class="settings-tab-pane">
+            <div class="mcp-skills-layout">
+              <!-- Left: MCP Servers -->
+              <section class="mcp-section">
+                <div class="panel-section-header">
+                  <h4>{{ text('mcpServers') }} ({{ mcpServers.length }})</h4>
+                </div>
+                <div class="mcp-servers-list">
+                  <div v-for="srv in mcpServers" :key="srv.id" class="mcp-card">
+                    <div class="mcp-card-meta">
+                      <div class="mcp-card-header">
+                        <span class="mcp-card-name">{{ srv.name }}</span>
+                        <span class="mcp-card-type-badge">{{ srv.type }}</span>
+                      </div>
+                      <span class="mcp-card-desc">{{ srv.description || srv.command || srv.baseUrl || '-' }}</span>
+                    </div>
+                    <label class="settings-switch">
+                      <input
+                        type="checkbox"
+                        :checked="srv.isActive !== false"
+                        @change="toggleMcpServer(srv)"
+                      />
+                      <span class="settings-slider" />
+                    </label>
+                  </div>
+                  <div v-if="mcpServers.length === 0" class="settings-empty-hint">
+                    {{ text('noMcpServers') }}
+                  </div>
+                </div>
+              </section>
+
+              <!-- Right: Skills -->
+              <section class="skills-section">
+                <div class="panel-section-header">
+                  <h4>{{ text('installedSkills') }} ({{ skillsList.length }})</h4>
+                </div>
+                <div class="skills-list">
+                  <div v-for="sk in skillsList" :key="sk.id" class="skill-card">
+                    <div class="skill-card-meta">
+                      <span class="skill-card-name">{{ sk.name }}</span>
+                      <span class="skill-card-desc">{{ sk.description || '-' }}</span>
+                    </div>
+                    <label class="settings-switch">
+                      <input
+                        type="checkbox"
+                        :checked="sk.isGlobalEnabled !== false"
+                        @change="toggleSkill(sk)"
+                      />
+                      <span class="settings-slider" />
+                    </label>
+                  </div>
+                  <div v-if="skillsList.length === 0" class="settings-empty-hint">
+                    {{ text('noSkillsInstalled') }}
+                  </div>
+                </div>
+              </section>
+            </div>
+          </div>
+
+          <!-- TAB 4: Preferences -->
           <div v-if="currentTab === 'preferences'" class="settings-tab-pane">
             <div class="preferences-panel">
               <div class="panel-section-header">
@@ -641,7 +990,6 @@ onMounted(() => {
               </div>
 
               <div class="preference-group">
-                <!-- Thought auto collapse -->
                 <div class="preference-item">
                   <div class="preference-item-meta">
                     <span class="preference-title">{{ text('thoughtAutoCollapseTitle') }}</span>
@@ -657,7 +1005,6 @@ onMounted(() => {
                   </label>
                 </div>
 
-                <!-- Show estimated tokens -->
                 <div class="preference-item">
                   <div class="preference-item-meta">
                     <span class="preference-title">{{ text('showEstimatedTokensTitle') }}</span>
