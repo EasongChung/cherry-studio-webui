@@ -7360,6 +7360,7 @@ const App = defineComponent({
                       settingsModalOpen.value = false
                     },
                     onSettingsChanged: () => {
+                      loadAgents()
                       loadModels()
                       loadConversations()
                     }

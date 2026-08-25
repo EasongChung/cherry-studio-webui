@@ -4,7 +4,23 @@ import type { createWebUiHttpClient } from '../service/httpClient'
 import { fallbackLanguage } from '../utils/constants'
 import { type TextKey, textPacks } from '../utils/textPacks'
 
-export type SettingsTabId = 'providers' | 'prompts' | 'mcp' | 'usage' | 'preferences'
+export type SettingsTabId = 'agents' | 'providers' | 'prompts' | 'mcp' | 'usage' | 'preferences'
+
+// --- Agent Types ---
+interface AgentEntity {
+  id: string
+  name: string
+  description?: string
+  instructions?: string
+  model?: string | null
+  modelName?: string | null
+  planModel?: string | null
+  smallModel?: string | null
+  configuration?: {
+    permission_mode?: 'default' | 'acceptEdits' | 'bypassPermissions' | 'plan' | 'auto'
+    reasoning_effort?: string
+  }
+}
 
 // --- Providers & Models Types ---
 interface ProviderEndpointConfig {
@@ -101,7 +117,7 @@ const emit = defineEmits<{
   (e: 'settingsChanged'): void
 }>()
 
-const currentTab = ref<SettingsTabId>('providers')
+const currentTab = ref<SettingsTabId>('agents')
 const text = (key: TextKey) => {
   const langKey = (props.language in textPacks ? props.language : fallbackLanguage) as keyof typeof textPacks
   return textPacks[langKey]?.[key] ?? textPacks[fallbackLanguage][key]
@@ -119,7 +135,148 @@ const showToast = (msg: string) => {
 }
 
 // ==========================================
-// 1. Providers & Models Management
+// 1. Agents Management
+// ==========================================
+const agents = ref<AgentEntity[]>([])
+const agentSearchQuery = ref('')
+const selectedAgentId = ref<string>('')
+const isLoadingAgents = ref(false)
+const isSavingAgent = ref(false)
+const showNewAgentDrawer = ref(false)
+
+const editAgentName = ref('')
+const editAgentDescription = ref('')
+const editAgentInstructions = ref('')
+const editAgentModel = ref<string>('')
+const editAgentPlanModel = ref<string>('')
+const editAgentSmallModel = ref<string>('')
+const editAgentPermissionMode = ref<'default' | 'acceptEdits' | 'bypassPermissions' | 'plan' | 'auto'>('auto')
+
+const filteredAgents = computed(() => {
+  const q = agentSearchQuery.value.trim().toLowerCase()
+  if (!q) return agents.value
+  return agents.value.filter(
+    (a) => a.name.toLowerCase().includes(q) || (a.description || '').toLowerCase().includes(q)
+  )
+})
+
+const selectedAgent = computed(() => {
+  return agents.value.find((a) => a.id === selectedAgentId.value)
+})
+
+const loadAgents = async () => {
+  isLoadingAgents.value = true
+  try {
+    const list = await props.httpClient.getJson<AgentEntity[]>('/api/data/agents')
+    agents.value = Array.isArray(list) ? list : []
+    if (agents.value.length > 0 && !selectedAgentId.value && agents.value[0]) {
+      selectAgent(agents.value[0].id)
+    }
+  } catch (err) {
+    console.error('Failed to load agents:', err)
+  } finally {
+    isLoadingAgents.value = false
+  }
+}
+
+const selectAgent = (id: string) => {
+  selectedAgentId.value = id
+  showNewAgentDrawer.value = false
+  const a = agents.value.find((item) => item.id === id)
+  if (a) {
+    editAgentName.value = a.name || ''
+    editAgentDescription.value = a.description || ''
+    editAgentInstructions.value = a.instructions || ''
+    editAgentModel.value = a.model || ''
+    editAgentPlanModel.value = a.planModel || ''
+    editAgentSmallModel.value = a.smallModel || ''
+    editAgentPermissionMode.value = a.configuration?.permission_mode || 'auto'
+  }
+}
+
+const saveAgent = async () => {
+  if (!selectedAgent.value || !editAgentName.value.trim()) return
+  isSavingAgent.value = true
+  try {
+    await props.httpClient.patchJson(`/api/data/agents/${encodeURIComponent(selectedAgent.value.id)}`, {
+      name: editAgentName.value.trim(),
+      description: editAgentDescription.value.trim() || undefined,
+      instructions: editAgentInstructions.value.trim() || undefined,
+      model: editAgentModel.value || undefined,
+      planModel: editAgentPlanModel.value || undefined,
+      smallModel: editAgentSmallModel.value || undefined,
+      configuration: {
+        ...(selectedAgent.value.configuration ?? {}),
+        permission_mode: editAgentPermissionMode.value
+      }
+    })
+    await loadAgents()
+    selectAgent(selectedAgent.value.id)
+    showToast(text('agentSaved'))
+    emit('settingsChanged')
+  } catch (err: unknown) {
+    showToast(err instanceof Error ? err.message : 'Save agent failed')
+  } finally {
+    isSavingAgent.value = false
+  }
+}
+
+const openNewAgent = () => {
+  showNewAgentDrawer.value = true
+  selectedAgentId.value = ''
+  editAgentName.value = ''
+  editAgentDescription.value = ''
+  editAgentInstructions.value = ''
+  editAgentModel.value = models.value[0]?.id || ''
+  editAgentPlanModel.value = ''
+  editAgentSmallModel.value = ''
+  editAgentPermissionMode.value = 'auto'
+}
+
+const createAgent = async () => {
+  if (!editAgentName.value.trim() || !editAgentModel.value) return
+  isSavingAgent.value = true
+  try {
+    const created = await props.httpClient.postJson<AgentEntity>('/api/data/agents', {
+      name: editAgentName.value.trim(),
+      description: editAgentDescription.value.trim() || undefined,
+      instructions: editAgentInstructions.value.trim() || undefined,
+      model: editAgentModel.value,
+      planModel: editAgentPlanModel.value || undefined,
+      smallModel: editAgentSmallModel.value || undefined,
+      type: 'claude-code',
+      configuration: {
+        permission_mode: editAgentPermissionMode.value
+      }
+    })
+    showNewAgentDrawer.value = false
+    await loadAgents()
+    if (created?.id) {
+      selectAgent(created.id)
+    }
+    showToast(text('agentCreated'))
+    emit('settingsChanged')
+  } catch (err: unknown) {
+    showToast(err instanceof Error ? err.message : 'Create agent failed')
+  } finally {
+    isSavingAgent.value = false
+  }
+}
+
+const deleteAgent = async (id: string) => {
+  try {
+    await props.httpClient.deleteJson(`/api/data/agents/${encodeURIComponent(id)}`)
+    selectedAgentId.value = ''
+    await loadAgents()
+    showToast(text('agentDeleted'))
+    emit('settingsChanged')
+  } catch (err: unknown) {
+    showToast(err instanceof Error ? err.message : 'Delete agent failed')
+  }
+}
+
+// ==========================================
+// 2. Providers & Models Management
 // ==========================================
 const providers = ref<ProviderEntity[]>([])
 const models = ref<ModelEntity[]>([])
@@ -377,7 +534,7 @@ const addCustomModel = async () => {
 }
 
 // ==========================================
-// 2. Prompts Management
+// 3. Prompts Management
 // ==========================================
 const prompts = ref<PromptEntity[]>([])
 const promptSearchQuery = ref('')
@@ -488,7 +645,7 @@ const deletePrompt = async (id: string) => {
 }
 
 // ==========================================
-// 3. MCP & Skills Management
+// 4. MCP & Skills Management
 // ==========================================
 const mcpServers = ref<McpServerEntity[]>([])
 const skillsList = ref<SkillEntity[]>([])
@@ -548,7 +705,7 @@ const toggleSkill = async (skill: SkillEntity) => {
 }
 
 // ==========================================
-// 4. Usage Statistics Management
+// 5. Usage Statistics Management
 // ==========================================
 const usageRecords = ref<AiUsageRecordItem[]>([])
 const isLoadingUsage = ref(false)
@@ -582,7 +739,7 @@ const loadUsageRecords = async () => {
 }
 
 // ==========================================
-// 5. Preferences & Web Search
+// 6. Preferences & Web Search
 // ==========================================
 const preferences = ref<{
   showEstimatedTokens: boolean
@@ -632,7 +789,6 @@ const loadPreferences = async () => {
 }
 
 const onWebSearchProviderChange = () => {
-  // Clear key or reload for the new provider
   preferences.value.searchApiKey = ''
   preferences.value.searchApiHost = ''
 }
@@ -678,6 +834,7 @@ const togglePreference = async (key: 'thoughtAutoCollapse' | 'showEstimatedToken
 }
 
 onMounted(() => {
+  loadAgents()
   loadProviders()
   loadModels()
   loadPrompts()
@@ -708,6 +865,15 @@ onMounted(() => {
       <!-- Body Layout: Sidebar Tabs + Content Area -->
       <div class="settings-modal-body">
         <nav class="settings-nav" aria-label="Settings Categories">
+          <button
+            class="settings-nav-item"
+            :class="{ 'settings-nav-item-active': currentTab === 'agents' }"
+            type="button"
+            @click="currentTab = 'agents'"
+          >
+            <span class="settings-nav-icon">👤</span>
+            <span>{{ text('agentsManagement') }}</span>
+          </button>
           <button
             class="settings-nav-item"
             :class="{ 'settings-nav-item-active': currentTab === 'providers' }"
@@ -760,6 +926,132 @@ onMounted(() => {
           <!-- Toast notification -->
           <div v-if="toastMessage" class="settings-toast">
             {{ toastMessage }}
+          </div>
+
+          <!-- TAB 0: Agents Management -->
+          <div v-if="currentTab === 'agents'" class="settings-tab-pane">
+            <div class="prompts-layout">
+              <aside class="prompts-sidebar">
+                <div class="prompts-search-wrap">
+                  <input
+                    v-model="agentSearchQuery"
+                    class="settings-input settings-search-input"
+                    type="search"
+                    :placeholder="text('searchAgents')"
+                  />
+                  <button class="settings-btn settings-btn-sm settings-btn-primary" type="button" @click="openNewAgent">
+                    + {{ text('newAgent') }}
+                  </button>
+                </div>
+                <div class="prompts-list">
+                  <div
+                    v-for="ag in filteredAgents"
+                    :key="ag.id"
+                    class="prompt-list-item"
+                    :class="{ 'prompt-list-item-selected': ag.id === selectedAgentId && !showNewAgentDrawer }"
+                    @click="selectAgent(ag.id)"
+                  >
+                    <div class="prompt-item-info">
+                      <span class="prompt-item-title">{{ ag.name }}</span>
+                      <span class="prompt-item-snippet">{{ ag.description || ag.model || '-' }}</span>
+                    </div>
+                  </div>
+                  <div v-if="filteredAgents.length === 0" class="settings-empty-hint">
+                    {{ text('noAgentsFound') }}
+                  </div>
+                </div>
+              </aside>
+
+              <section class="prompt-details-panel">
+                <div v-if="showNewAgentDrawer || selectedAgent" class="prompt-form-wrap">
+                  <div class="panel-section-header">
+                    <h3>{{ showNewAgentDrawer ? text('newAgent') : text('editAgent') }}</h3>
+                    <div class="section-actions">
+                      <button
+                        v-if="!showNewAgentDrawer && selectedAgent"
+                        class="settings-btn settings-btn-sm settings-btn-danger"
+                        type="button"
+                        @click="deleteAgent(selectedAgent.id)"
+                      >
+                        {{ text('delete') }}
+                      </button>
+                      <button
+                        class="settings-btn settings-btn-primary"
+                        type="button"
+                        :disabled="isSavingAgent || !editAgentName.trim()"
+                        @click="showNewAgentDrawer ? createAgent() : saveAgent()"
+                      >
+                        {{ isSavingAgent ? text('saving') : text('save') }}
+                      </button>
+                    </div>
+                  </div>
+
+                  <div class="settings-form-grid">
+                    <div class="settings-form-row">
+                      <label class="settings-label">{{ text('agentName') }}</label>
+                      <input
+                        v-model="editAgentName"
+                        class="settings-input"
+                        type="text"
+                        placeholder="e.g. Claude Code"
+                      />
+                    </div>
+
+                    <div class="settings-form-row">
+                      <label class="settings-label">{{ text('agentDescription') }}</label>
+                      <input
+                        v-model="editAgentDescription"
+                        class="settings-input"
+                        type="text"
+                        placeholder="e.g. AI Coding Assistant"
+                      />
+                    </div>
+
+                    <div class="settings-form-row">
+                      <label class="settings-label">{{ text('primaryModel') }}</label>
+                      <select v-model="editAgentModel" class="settings-select">
+                        <option v-for="m in models" :key="m.id" :value="m.id">
+                          {{ m.name || m.apiModelId || m.id }}
+                        </option>
+                      </select>
+                    </div>
+
+                    <div class="settings-form-row">
+                      <label class="settings-label">{{ text('planModel') }}</label>
+                      <select v-model="editAgentPlanModel" class="settings-select">
+                        <option value="">-- {{ text('reasoningNone') }} --</option>
+                        <option v-for="m in models" :key="m.id" :value="m.id">
+                          {{ m.name || m.apiModelId || m.id }}
+                        </option>
+                      </select>
+                    </div>
+
+                    <div class="settings-form-row">
+                      <label class="settings-label">{{ text('defaultPermissionMode') }}</label>
+                      <select v-model="editAgentPermissionMode" class="settings-select">
+                        <option value="auto">Auto (Smart Approve)</option>
+                        <option value="default">Normal (Strict Confirmation)</option>
+                        <option value="bypassPermissions">Bypass (Full Autonomous)</option>
+                        <option value="acceptEdits">Accept Edits</option>
+                      </select>
+                    </div>
+
+                    <div class="settings-form-row">
+                      <label class="settings-label">{{ text('agentInstructions') }}</label>
+                      <textarea
+                        v-model="editAgentInstructions"
+                        class="settings-textarea"
+                        rows="6"
+                        :placeholder="text('agentInstructionsPlaceholder')"
+                      />
+                    </div>
+                  </div>
+                </div>
+                <div v-else class="settings-empty-hint-large">
+                  {{ text('selectAgentToEdit') }}
+                </div>
+              </section>
+            </div>
           </div>
 
           <!-- TAB 1: Providers & Models -->
@@ -1109,7 +1401,6 @@ onMounted(() => {
                 </button>
               </div>
 
-              <!-- Summary Cards -->
               <div class="usage-summary-grid">
                 <div class="usage-stat-card">
                   <span class="usage-stat-label">{{ text('totalRequests') }}</span>
@@ -1129,7 +1420,6 @@ onMounted(() => {
                 </div>
               </div>
 
-              <!-- Usage Records Table -->
               <div class="usage-table-section">
                 <h4>{{ text('recentUsageRecords') }}</h4>
                 <div class="usage-table-wrap">
@@ -1160,7 +1450,6 @@ onMounted(() => {
           <!-- TAB 5: Preferences & Web Search -->
           <div v-if="currentTab === 'preferences'" class="settings-tab-pane">
             <div class="preferences-panel">
-              <!-- Web Search Section -->
               <div class="preference-section-block">
                 <div class="panel-section-header">
                   <h3>{{ text('webSearchSettings') }}</h3>
@@ -1222,7 +1511,6 @@ onMounted(() => {
                 </div>
               </div>
 
-              <!-- General Switches -->
               <div class="preference-section-block">
                 <div class="panel-section-header">
                   <h3>{{ text('generalPreferences') }}</h3>

@@ -222,6 +222,8 @@ const writableDataApiPatterns = [
   { pattern: /^\/agent-sessions\/[^/]+$/, methods: ['PATCH', 'DELETE'] },
   { pattern: /^\/agent-sessions\/[^/]+\/workspace$/, methods: ['PUT'] },
   { pattern: /^\/agent-sessions\/[^/]+\/messages\/[^/]+$/, methods: ['DELETE'] },
+  { pattern: /^\/agents$/, methods: ['POST'] },
+  { pattern: /^\/agents\/[^/]+$/, methods: ['PATCH', 'DELETE'] },
   { pattern: /^\/providers$/, methods: ['POST'] },
   { pattern: /^\/providers\/[^/]+$/, methods: ['PATCH', 'DELETE'] },
   { pattern: /^\/providers\/[^/]+\/api-keys$/, methods: ['POST', 'PUT'] },
@@ -632,6 +634,7 @@ const handleDataApiProxy = async (
           data: { conversationId, reason: method === 'DELETE' ? 'session-deleted' : 'session-updated' }
         })
       } else if (
+        dataPath.startsWith('/agents') ||
         dataPath.startsWith('/providers') ||
         dataPath.startsWith('/models') ||
         dataPath.startsWith('/prompts') ||
