@@ -4,7 +4,7 @@ import type { createWebUiHttpClient } from '../service/httpClient'
 import { fallbackLanguage } from '../utils/constants'
 import { type TextKey, textPacks } from '../utils/textPacks'
 
-export type SettingsTabId = 'providers' | 'prompts' | 'mcp' | 'preferences'
+export type SettingsTabId = 'providers' | 'prompts' | 'mcp' | 'usage' | 'preferences'
 
 // --- Providers & Models Types ---
 interface ProviderEndpointConfig {
@@ -67,12 +67,28 @@ interface SkillEntity {
   isEnabled?: boolean
 }
 
+// --- Usage Records Types ---
+interface AiUsageRecordItem {
+  id: string
+  modelId?: string | null
+  modelName?: string | null
+  providerId?: string | null
+  providerName?: string | null
+  inputTokens?: number | null
+  outputTokens?: number | null
+  totalTokens?: number | null
+  createdAt?: string | null
+}
+
 // --- Preferences Types ---
 interface WebUiPreferences {
   showEstimatedTokens?: boolean
   thoughtAutoCollapse?: boolean
   chatInputPinnedTools?: string[]
   agentInputPinnedTools?: string[]
+  webSearchProvider?: string
+  webSearchMaxResults?: number
+  webSearchProviderOverrides?: Record<string, { apiKey?: string; apiHost?: string }>
 }
 
 const props = defineProps<{
@@ -532,28 +548,116 @@ const toggleSkill = async (skill: SkillEntity) => {
 }
 
 // ==========================================
-// 4. Preferences Management
+// 4. Usage Statistics Management
+// ==========================================
+const usageRecords = ref<AiUsageRecordItem[]>([])
+const isLoadingUsage = ref(false)
+
+const totalUsageStats = computed(() => {
+  let reqs = usageRecords.value.length
+  let input = 0
+  let output = 0
+  let total = 0
+  for (const r of usageRecords.value) {
+    input += r.inputTokens ?? 0
+    output += r.outputTokens ?? 0
+    total += r.totalTokens ?? (r.inputTokens ?? 0) + (r.outputTokens ?? 0)
+  }
+  return { requests: reqs, input, output, total }
+})
+
+const loadUsageRecords = async () => {
+  isLoadingUsage.value = true
+  try {
+    const res = await props.httpClient.getJson<{ items?: AiUsageRecordItem[]; total?: number } | AiUsageRecordItem[]>(
+      '/api/data/ai-usage-records'
+    )
+    const list = Array.isArray(res) ? res : res?.items ?? []
+    usageRecords.value = list
+  } catch (err) {
+    console.error('Failed to load usage records:', err)
+  } finally {
+    isLoadingUsage.value = false
+  }
+}
+
+// ==========================================
+// 5. Preferences & Web Search
 // ==========================================
 const preferences = ref<{
   showEstimatedTokens: boolean
   thoughtAutoCollapse: boolean
+  webSearchProvider: string
+  webSearchMaxResults: number
+  searchApiKey: string
+  searchApiHost: string
 }>({
   showEstimatedTokens: false,
-  thoughtAutoCollapse: false
+  thoughtAutoCollapse: false,
+  webSearchProvider: 'tavily',
+  webSearchMaxResults: 5,
+  searchApiKey: '',
+  searchApiHost: ''
 })
 const isSavingPreferences = ref(false)
+
+const webSearchEngineOptions = [
+  { id: 'tavily', name: 'Tavily Search' },
+  { id: 'google', name: 'Google Search' },
+  { id: 'bing', name: 'Bing Search' },
+  { id: 'brave', name: 'Brave Search' },
+  { id: 'searxng', name: 'SearXNG' },
+  { id: 'jina', name: 'Jina Search' },
+  { id: 'exa-mcp', name: 'Exa (MCP)' }
+]
 
 const loadPreferences = async () => {
   try {
     const data = await props.httpClient.getJson<WebUiPreferences>('/api/webui/preferences')
     if (data) {
+      const selectedEngine = data.webSearchProvider || 'tavily'
+      const override = data.webSearchProviderOverrides?.[selectedEngine]
       preferences.value = {
         showEstimatedTokens: Boolean(data.showEstimatedTokens),
-        thoughtAutoCollapse: Boolean(data.thoughtAutoCollapse)
+        thoughtAutoCollapse: Boolean(data.thoughtAutoCollapse),
+        webSearchProvider: selectedEngine,
+        webSearchMaxResults: data.webSearchMaxResults ?? 5,
+        searchApiKey: override?.apiKey || '',
+        searchApiHost: override?.apiHost || ''
       }
     }
   } catch (err) {
     console.error('Failed to load preferences:', err)
+  }
+}
+
+const onWebSearchProviderChange = () => {
+  // Clear key or reload for the new provider
+  preferences.value.searchApiKey = ''
+  preferences.value.searchApiHost = ''
+}
+
+const saveWebSearchPreferences = async () => {
+  isSavingPreferences.value = true
+  try {
+    const providerOverrides = {
+      [preferences.value.webSearchProvider]: {
+        apiKey: preferences.value.searchApiKey.trim() || undefined,
+        apiHost: preferences.value.searchApiHost.trim() || undefined
+      }
+    }
+
+    await props.httpClient.putJson('/api/webui/preferences', {
+      webSearchProvider: preferences.value.webSearchProvider,
+      webSearchMaxResults: Number(preferences.value.webSearchMaxResults),
+      webSearchProviderOverrides: providerOverrides
+    })
+    showToast(text('searchPreferencesSaved'))
+    emit('settingsChanged')
+  } catch (err: unknown) {
+    showToast(err instanceof Error ? err.message : 'Save search settings failed')
+  } finally {
+    isSavingPreferences.value = false
   }
 }
 
@@ -579,6 +683,7 @@ onMounted(() => {
   loadPrompts()
   loadMcpServers()
   loadSkills()
+  loadUsageRecords()
   loadPreferences()
 })
 </script>
@@ -629,6 +734,15 @@ onMounted(() => {
           >
             <span class="settings-nav-icon">🧩</span>
             <span>{{ text('mcpAndSkills') }}</span>
+          </button>
+          <button
+            class="settings-nav-item"
+            :class="{ 'settings-nav-item-active': currentTab === 'usage' }"
+            type="button"
+            @click="currentTab = 'usage'"
+          >
+            <span class="settings-nav-icon">📊</span>
+            <span>{{ text('usageStatistics') }}</span>
           </button>
           <button
             class="settings-nav-item"
@@ -925,7 +1039,6 @@ onMounted(() => {
           <!-- TAB 3: MCP & Skills -->
           <div v-if="currentTab === 'mcp'" class="settings-tab-pane">
             <div class="mcp-skills-layout">
-              <!-- Left: MCP Servers -->
               <section class="mcp-section">
                 <div class="panel-section-header">
                   <h4>{{ text('mcpServers') }} ({{ mcpServers.length }})</h4>
@@ -954,7 +1067,6 @@ onMounted(() => {
                 </div>
               </section>
 
-              <!-- Right: Skills -->
               <section class="skills-section">
                 <div class="panel-section-header">
                   <h4>{{ text('installedSkills') }} ({{ skillsList.length }})</h4>
@@ -982,42 +1094,170 @@ onMounted(() => {
             </div>
           </div>
 
-          <!-- TAB 4: Preferences -->
-          <div v-if="currentTab === 'preferences'" class="settings-tab-pane">
-            <div class="preferences-panel">
+          <!-- TAB 4: Usage Statistics -->
+          <div v-if="currentTab === 'usage'" class="settings-tab-pane">
+            <div class="usage-panel">
               <div class="panel-section-header">
-                <h3>{{ text('generalPreferences') }}</h3>
+                <h3>{{ text('usageStatistics') }}</h3>
+                <button
+                  class="settings-btn settings-btn-sm settings-btn-secondary"
+                  type="button"
+                  :disabled="isLoadingUsage"
+                  @click="loadUsageRecords"
+                >
+                  🔄 {{ isLoadingUsage ? text('loading') : text('refresh') }}
+                </button>
               </div>
 
-              <div class="preference-group">
-                <div class="preference-item">
-                  <div class="preference-item-meta">
-                    <span class="preference-title">{{ text('thoughtAutoCollapseTitle') }}</span>
-                    <span class="preference-desc">{{ text('thoughtAutoCollapseDesc') }}</span>
+              <!-- Summary Cards -->
+              <div class="usage-summary-grid">
+                <div class="usage-stat-card">
+                  <span class="usage-stat-label">{{ text('totalRequests') }}</span>
+                  <span class="usage-stat-val">{{ totalUsageStats.requests }}</span>
+                </div>
+                <div class="usage-stat-card">
+                  <span class="usage-stat-label">{{ text('totalTokens') }}</span>
+                  <span class="usage-stat-val text-primary">{{ totalUsageStats.total.toLocaleString() }}</span>
+                </div>
+                <div class="usage-stat-card">
+                  <span class="usage-stat-label">{{ text('inputTokens') }}</span>
+                  <span class="usage-stat-val">{{ totalUsageStats.input.toLocaleString() }}</span>
+                </div>
+                <div class="usage-stat-card">
+                  <span class="usage-stat-label">{{ text('outputTokens') }}</span>
+                  <span class="usage-stat-val">{{ totalUsageStats.output.toLocaleString() }}</span>
+                </div>
+              </div>
+
+              <!-- Usage Records Table -->
+              <div class="usage-table-section">
+                <h4>{{ text('recentUsageRecords') }}</h4>
+                <div class="usage-table-wrap">
+                  <div
+                    v-for="rec in usageRecords.slice(0, 30)"
+                    :key="rec.id"
+                    class="usage-table-row"
+                  >
+                    <div class="usage-row-model">
+                      <span class="usage-row-model-name">{{ rec.modelName || rec.modelId || 'Unknown Model' }}</span>
+                      <span class="usage-row-provider">{{ rec.providerName || rec.providerId || '-' }}</span>
+                    </div>
+                    <div class="usage-row-tokens">
+                      <span class="usage-token-badge">{{ (rec.totalTokens ?? 0).toLocaleString() }} tok</span>
+                      <span class="usage-token-detail">
+                        in: {{ (rec.inputTokens ?? 0).toLocaleString() }} / out: {{ (rec.outputTokens ?? 0).toLocaleString() }}
+                      </span>
+                    </div>
                   </div>
-                  <label class="settings-switch">
-                    <input
-                      type="checkbox"
-                      :checked="preferences.thoughtAutoCollapse"
-                      @change="togglePreference('thoughtAutoCollapse')"
-                    />
-                    <span class="settings-slider" />
-                  </label>
+                  <div v-if="usageRecords.length === 0" class="settings-empty-hint">
+                    {{ text('noUsageRecords') }}
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- TAB 5: Preferences & Web Search -->
+          <div v-if="currentTab === 'preferences'" class="settings-tab-pane">
+            <div class="preferences-panel">
+              <!-- Web Search Section -->
+              <div class="preference-section-block">
+                <div class="panel-section-header">
+                  <h3>{{ text('webSearchSettings') }}</h3>
+                  <button
+                    class="settings-btn settings-btn-primary"
+                    type="button"
+                    :disabled="isSavingPreferences"
+                    @click="saveWebSearchPreferences"
+                  >
+                    {{ isSavingPreferences ? text('saving') : text('save') }}
+                  </button>
                 </div>
 
-                <div class="preference-item">
-                  <div class="preference-item-meta">
-                    <span class="preference-title">{{ text('showEstimatedTokensTitle') }}</span>
-                    <span class="preference-desc">{{ text('showEstimatedTokensDesc') }}</span>
+                <div class="settings-form-grid">
+                  <div class="settings-form-row">
+                    <label class="settings-label">{{ text('searchEngine') }}</label>
+                    <select
+                      v-model="preferences.webSearchProvider"
+                      class="settings-select"
+                      @change="onWebSearchProviderChange"
+                    >
+                      <option v-for="opt in webSearchEngineOptions" :key="opt.id" :value="opt.id">
+                        {{ opt.name }}
+                      </option>
+                    </select>
                   </div>
-                  <label class="settings-switch">
+
+                  <div class="settings-form-row">
+                    <label class="settings-label">{{ text('searchApiKey') }}</label>
                     <input
-                      type="checkbox"
-                      :checked="preferences.showEstimatedTokens"
-                      @change="togglePreference('showEstimatedTokens')"
+                      v-model="preferences.searchApiKey"
+                      class="settings-input"
+                      type="password"
+                      placeholder="API Key for selected engine (e.g. tvly-...)"
                     />
-                    <span class="settings-slider" />
-                  </label>
+                  </div>
+
+                  <div class="settings-form-row">
+                    <label class="settings-label">{{ text('searchApiHost') }}</label>
+                    <input
+                      v-model="preferences.searchApiHost"
+                      class="settings-input"
+                      type="url"
+                      placeholder="https://api.tavily.com"
+                    />
+                  </div>
+
+                  <div class="settings-form-row">
+                    <label class="settings-label">{{ text('searchMaxResults') }}: {{ preferences.webSearchMaxResults }}</label>
+                    <input
+                      v-model.number="preferences.webSearchMaxResults"
+                      class="settings-range"
+                      type="range"
+                      min="1"
+                      max="20"
+                      step="1"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              <!-- General Switches -->
+              <div class="preference-section-block">
+                <div class="panel-section-header">
+                  <h3>{{ text('generalPreferences') }}</h3>
+                </div>
+
+                <div class="preference-group">
+                  <div class="preference-item">
+                    <div class="preference-item-meta">
+                      <span class="preference-title">{{ text('thoughtAutoCollapseTitle') }}</span>
+                      <span class="preference-desc">{{ text('thoughtAutoCollapseDesc') }}</span>
+                    </div>
+                    <label class="settings-switch">
+                      <input
+                        type="checkbox"
+                        :checked="preferences.thoughtAutoCollapse"
+                        @change="togglePreference('thoughtAutoCollapse')"
+                      />
+                      <span class="settings-slider" />
+                    </label>
+                  </div>
+
+                  <div class="preference-item">
+                    <div class="preference-item-meta">
+                      <span class="preference-title">{{ text('showEstimatedTokensTitle') }}</span>
+                      <span class="preference-desc">{{ text('showEstimatedTokensDesc') }}</span>
+                    </div>
+                    <label class="settings-switch">
+                      <input
+                        type="checkbox"
+                        :checked="preferences.showEstimatedTokens"
+                        @change="togglePreference('showEstimatedTokens')"
+                      />
+                      <span class="settings-slider" />
+                    </label>
+                  </div>
                 </div>
               </div>
             </div>

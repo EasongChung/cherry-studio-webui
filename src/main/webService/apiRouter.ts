@@ -207,6 +207,7 @@ const readableDataApiPatterns = [
   /^\/providers(?:$|\/)/,
   /^\/prompts(?:$|\/)/,
   /^\/mcp-servers(?:$|\/)/,
+  /^\/ai-usage-records(?:$|\/)/,
   /^\/agent-workspaces$/,
   /^\/agent-sessions$/,
   /^\/agent-sessions\/latest$/,
@@ -895,7 +896,12 @@ export const createWebUiApiRouter = ({
             agentInputPinnedTools: (prefService.get('agent.input.toolbar.pinned_tools') as string[] | undefined) ?? [
               'composer:new-session',
               'skills'
-            ]
+            ],
+            webSearchProvider:
+              (prefService.get('chat.web_search.default_search_keywords_provider') as string | undefined) ?? 'tavily',
+            webSearchMaxResults: (prefService.get('chat.web_search.max_results') as number | undefined) ?? 5,
+            webSearchProviderOverrides:
+              (prefService.get('chat.web_search.provider_overrides') as Record<string, unknown> | undefined) ?? {}
           }
         }
       }
@@ -916,6 +922,12 @@ export const createWebUiApiRouter = ({
           prefService.set('chat.input.toolbar.pinned_tools', candidate.chatInputPinnedTools)
         if (Array.isArray(candidate.agentInputPinnedTools))
           prefService.set('agent.input.toolbar.pinned_tools', candidate.agentInputPinnedTools)
+        if (typeof candidate.webSearchProvider === 'string')
+          prefService.set('chat.web_search.default_search_keywords_provider', candidate.webSearchProvider as never)
+        if (typeof candidate.webSearchMaxResults === 'number')
+          prefService.set('chat.web_search.max_results', Math.max(1, Math.min(20, candidate.webSearchMaxResults)))
+        if (candidate.webSearchProviderOverrides && typeof candidate.webSearchProviderOverrides === 'object')
+          prefService.set('chat.web_search.provider_overrides', candidate.webSearchProviderOverrides as never)
 
         return { status: 200, body: { ok: true } }
       }
