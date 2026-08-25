@@ -186,6 +186,8 @@ const MAX_WEBUI_REQUEST_BYTES = 40 * 1024 * 1024
 const webUiModelsPath = '/api/webui/models'
 const webUiPreferencesPath = '/api/webui/preferences'
 const webUiProviderTestPath = '/api/webui/providers/test'
+const webUiModelTestPath = '/api/webui/models/test'
+const webUiProviderFetchModelsPath = /^\/api\/webui\/providers\/([^/]+)\/fetch-models$/
 const webUiApiRetryPath = /^\/api\/webui\/api-retry\/([^/]+)$/
 const webUiStreamCachePath = /^\/api\/webui\/stream-cache\/([^/]+)$/
 const sessionMessagePath = /^\/api\/agent-sessions\/([^/]+)\/messages$/
@@ -202,17 +204,15 @@ const sessionWorkspaceFilePath = /^\/api\/agent-sessions\/([^/]+)\/workspace\/fi
 const sessionWorkspacePreviewPath = /^\/api\/agent-sessions\/([^/]+)\/workspace\/preview$/
 const fileEntryPath = /^\/api\/files\/([^/]+)$/
 const readableDataApiPatterns = [
-  /^\/agents$/,
+  /^\/agents(?:$|\/)/,
   /^\/models(?:$|\/)/,
   /^\/providers(?:$|\/)/,
   /^\/prompts(?:$|\/)/,
+  /^\/prompt-bindings(?:$|\/)/,
   /^\/mcp-servers(?:$|\/)/,
   /^\/ai-usage-records(?:$|\/)/,
-  /^\/agent-workspaces$/,
-  /^\/agent-sessions$/,
-  /^\/agent-sessions\/latest$/,
-  /^\/agent-sessions\/[^/]+$/,
-  /^\/agent-sessions\/[^/]+\/messages$/,
+  /^\/agent-workspaces(?:$|\/)/,
+  /^\/agent-sessions(?:$|\/)/,
   /^\/skills(?:$|\/)/,
   /^\/knowledge-bases(?:$|\/)/
 ] as const
@@ -620,18 +620,22 @@ const handleDataApiProxy = async (
       status: apiResponse.status,
       body: apiResponse.error ?? apiResponse.data ?? null
     }
-    if (apiResponse.status >= 200 && apiResponse.status < 300) {
+    if (isWrite && apiResponse.status >= 200 && apiResponse.status < 300) {
       if (dataPath === '/agent-sessions' && method === 'POST') {
         sseRelay.broadcast({ event: 'sync', data: { reason: 'session-created' } })
       } else if (dataPath.startsWith('/agent-sessions')) {
         const conversationIdMatch = dataPath.match(/^\/agent-sessions\/([^/]+)/)
         const conversationId = conversationIdMatch ? decodeURIComponent(conversationIdMatch[1] ?? '') : undefined
-        if (conversationId) {
+        if (conversationId && (method === 'DELETE' || dataPath.includes('/messages/'))) {
           application.get('CacheService').deleteShared(AGENT_SESSION_CONTEXT_USAGE_CACHE_KEY(conversationId))
         }
+        const isMsgDelete = method === 'DELETE' && dataPath.includes('/messages/')
         sseRelay.broadcast({
           event: 'sync',
-          data: { conversationId, reason: method === 'DELETE' ? 'session-deleted' : 'session-updated' }
+          data: {
+            conversationId,
+            reason: isMsgDelete ? 'message-deleted' : method === 'DELETE' ? 'session-deleted' : 'session-updated'
+          }
         })
       } else if (
         dataPath.startsWith('/agents') ||
@@ -904,7 +908,12 @@ export const createWebUiApiRouter = ({
               (prefService.get('chat.web_search.default_search_keywords_provider') as string | undefined) ?? 'tavily',
             webSearchMaxResults: (prefService.get('chat.web_search.max_results') as number | undefined) ?? 5,
             webSearchProviderOverrides:
-              (prefService.get('chat.web_search.provider_overrides') as Record<string, unknown> | undefined) ?? {}
+              (prefService.get('chat.web_search.provider_overrides') as Record<string, unknown> | undefined) ?? {},
+            contextManagementEnabled: Boolean(prefService.get('chat.context_settings.enabled')),
+            contextMaxMessages: (prefService.get('chat.context_settings.max_messages') as number | null | undefined) ?? null,
+            contextTruncateThreshold: (prefService.get('chat.context_settings.truncate_threshold') as number | undefined) ?? 50000,
+            contextCompressEnabled: Boolean(prefService.get('chat.context_settings.compress.enabled')),
+            contextCompressModelId: (prefService.get('chat.context_settings.compress.model_id') as string | null | undefined) ?? null
           }
         }
       }
@@ -931,6 +940,26 @@ export const createWebUiApiRouter = ({
           prefService.set('chat.web_search.max_results', Math.max(1, Math.min(20, candidate.webSearchMaxResults)))
         if (candidate.webSearchProviderOverrides && typeof candidate.webSearchProviderOverrides === 'object')
           prefService.set('chat.web_search.provider_overrides', candidate.webSearchProviderOverrides as never)
+        if (candidate.contextManagementEnabled !== undefined)
+          prefService.set('chat.context_settings.enabled', Boolean(candidate.contextManagementEnabled))
+        if (candidate.contextMaxMessages !== undefined)
+          prefService.set(
+            'chat.context_settings.max_messages',
+            typeof candidate.contextMaxMessages === 'number' && candidate.contextMaxMessages > 0
+              ? Math.floor(candidate.contextMaxMessages)
+              : null
+          )
+        if (typeof candidate.contextTruncateThreshold === 'number')
+          prefService.set('chat.context_settings.truncate_threshold', Math.max(1000, Math.floor(candidate.contextTruncateThreshold)))
+        if (candidate.contextCompressEnabled !== undefined)
+          prefService.set('chat.context_settings.compress.enabled', Boolean(candidate.contextCompressEnabled))
+        if (candidate.contextCompressModelId !== undefined)
+          prefService.set(
+            'chat.context_settings.compress.model_id',
+            typeof candidate.contextCompressModelId === 'string' && candidate.contextCompressModelId.trim()
+              ? candidate.contextCompressModelId.trim()
+              : null
+          )
 
         return { status: 200, body: { ok: true } }
       }
@@ -938,10 +967,84 @@ export const createWebUiApiRouter = ({
       return methodNotAllowed(['GET', 'PUT'])
     }
 
+    const fetchModelsMatch = pathname.match(webUiProviderFetchModelsPath)
+    if (fetchModelsMatch) {
+      if (method !== 'POST') return methodNotAllowed(['POST'])
+      const providerId = decodeURIComponent(fetchModelsMatch[1] ?? '')
+      if (!providerId) return { status: 400, body: { code: 'WEBUI_INVALID_PROVIDER', message: 'Provider ID missing' } }
+
+      try {
+        const aiService = application.get('AiService')
+        const rawModels = await aiService.listModels({ providerId, throwOnError: true })
+        if (!Array.isArray(rawModels) || rawModels.length === 0) {
+          return { status: 200, body: { models: [] } }
+        }
+
+        const modelsDto = rawModels
+          .map((m) => ({
+            providerId,
+            modelId: m.apiModelId ?? (m.id ? m.id.split('::').pop() : '') ?? m.name ?? '',
+            name: m.name ?? m.apiModelId ?? '',
+            group: m.group,
+            capabilities: m.capabilities,
+            endpointTypes: m.endpointTypes,
+            contextWindow: m.contextWindow
+          }))
+          .filter((m) => Boolean(m.modelId))
+
+        if (modelsDto.length > 0) {
+          await ApiServer.getInstance().handleRequest({
+            id: randomUUID(),
+            method: 'POST',
+            path: '/models:batch',
+            body: { models: modelsDto },
+            metadata: { timestamp: Date.now() }
+          })
+          sseRelay.broadcast({ event: 'sync', data: { reason: 'settings-updated' } })
+        }
+
+        return { status: 200, body: { models: modelsDto } }
+      } catch (err: unknown) {
+        return {
+          status: 500,
+          body: {
+            code: 'WEBUI_FETCH_MODELS_FAILED',
+            message: err instanceof Error ? err.message : 'Failed to fetch models from provider'
+          }
+        }
+      }
+    }
+
+    if (pathname === webUiModelTestPath) {
+      if (method !== 'POST') return methodNotAllowed(['POST'])
+      const body = (await readJsonBody(request)) as { modelId?: string; apiKey?: string; timeout?: number } | undefined
+      if (!body?.modelId) {
+        return { status: 400, body: { code: 'WEBUI_INVALID_MODEL', message: 'modelId is required' } }
+      }
+
+      try {
+        const aiService = application.get('AiService')
+        const result = await aiService.checkModel({
+          modelId: body.modelId,
+          apiKeyOverride: body.apiKey?.trim() || undefined,
+          timeout: body.timeout ?? 15000
+        })
+        return { status: 200, body: { ok: true, latencyMs: Math.round(result.latency) } }
+      } catch (err: unknown) {
+        return {
+          status: 200,
+          body: {
+            ok: false,
+            error: err instanceof Error ? err.message : 'Model check failed'
+          }
+        }
+      }
+    }
+
     if (pathname === webUiProviderTestPath) {
       if (method !== 'POST') return methodNotAllowed(['POST'])
       const body = (await readJsonBody(request)) as
-        | { providerId?: string; baseUrl?: string; apiKey?: string }
+        | { providerId?: string; baseUrl?: string; apiKey?: string; modelId?: string }
         | undefined
       if (!body || typeof body !== 'object') {
         return { status: 400, body: { code: 'WEBUI_INVALID_BODY', message: 'Request body must be JSON' } }
@@ -949,6 +1052,16 @@ export const createWebUiApiRouter = ({
 
       const startTime = Date.now()
       try {
+        if (body.modelId) {
+          const aiService = application.get('AiService')
+          const result = await aiService.checkModel({
+            modelId: body.modelId,
+            apiKeyOverride: body.apiKey?.trim() || undefined,
+            timeout: 15000
+          })
+          return { status: 200, body: { ok: true, latencyMs: Math.round(result.latency) } }
+        }
+
         let testUrl = typeof body.baseUrl === 'string' ? body.baseUrl.trim() : ''
         if (!testUrl && body.providerId) {
           const providerRes = await ApiServer.getInstance().handleRequest({

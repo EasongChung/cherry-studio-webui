@@ -96,6 +96,25 @@ interface AiUsageRecordItem {
   createdAt?: string | null
 }
 
+interface AiUsageStatsBucket {
+  modelId?: string | null
+  providerId?: string | null
+  totalTokens?: number
+  totalInputTokens?: number
+  totalOutputTokens?: number
+  requestCount?: number
+}
+
+interface AiUsageStatsResponse {
+  totals?: {
+    totalTokens?: number
+    totalInputTokens?: number
+    totalOutputTokens?: number
+    requestCount?: number
+  }
+  buckets?: AiUsageStatsBucket[]
+}
+
 // --- Preferences Types ---
 interface WebUiPreferences {
   showEstimatedTokens?: boolean
@@ -105,6 +124,13 @@ interface WebUiPreferences {
   webSearchProvider?: string
   webSearchMaxResults?: number
   webSearchProviderOverrides?: Record<string, { apiKey?: string; apiHost?: string }>
+  searchApiKey?: string
+  searchApiHost?: string
+  contextManagementEnabled?: boolean
+  contextMaxMessages?: number | null
+  contextTruncateThreshold?: number
+  contextCompressEnabled?: boolean
+  contextCompressModelId?: string | null
 }
 
 const props = defineProps<{
@@ -167,8 +193,9 @@ const selectedAgent = computed(() => {
 const loadAgents = async () => {
   isLoadingAgents.value = true
   try {
-    const list = await props.httpClient.getJson<AgentEntity[]>('/api/data/agents')
-    agents.value = Array.isArray(list) ? list : []
+    const res = await props.httpClient.getJson<{ items?: AgentEntity[] } | AgentEntity[]>('/api/data/agents')
+    const list = Array.isArray(res) ? res : res?.items ?? []
+    agents.value = list
     if (agents.value.length > 0 && !selectedAgentId.value && agents.value[0]) {
       selectAgent(agents.value[0].id)
     }
@@ -291,9 +318,12 @@ const testConnectionState = ref<{
   message?: string
 }>({ loading: false })
 
+const testingModelId = ref<string>('')
+
 const editProviderName = ref('')
 const editBaseUrl = ref('')
 const editApiKey = ref('')
+const savedApiKey = ref('')
 const isApiKeyDirty = ref(false)
 const showApiKeyPlain = ref(false)
 const editIsEnabled = ref(true)
@@ -324,8 +354,9 @@ const currentProviderModels = computed(() => {
 const loadProviders = async () => {
   isLoadingProviders.value = true
   try {
-    const list = await props.httpClient.getJson<ProviderEntity[]>('/api/data/providers')
-    providers.value = Array.isArray(list) ? list : []
+    const res = await props.httpClient.getJson<{ items?: ProviderEntity[] } | ProviderEntity[]>('/api/data/providers')
+    const list = Array.isArray(res) ? res : res?.items ?? []
+    providers.value = list
     if (providers.value.length > 0 && !selectedProviderId.value && providers.value[0]) {
       selectProvider(providers.value[0].id)
     }
@@ -338,14 +369,15 @@ const loadProviders = async () => {
 
 const loadModels = async () => {
   try {
-    const list = await props.httpClient.getJson<ModelEntity[]>('/api/data/models')
-    models.value = Array.isArray(list) ? list : []
+    const res = await props.httpClient.getJson<{ items?: ModelEntity[] } | ModelEntity[]>('/api/data/models')
+    const list = Array.isArray(res) ? res : res?.items ?? []
+    models.value = list
   } catch (err) {
     console.error('Failed to load models:', err)
   }
 }
 
-const selectProvider = (id: string) => {
+const selectProvider = async (id: string) => {
   selectedProviderId.value = id
   testConnectionState.value = { loading: false }
   showAddModelForm.value = false
@@ -362,10 +394,21 @@ const selectProvider = (id: string) => {
       (p.endpointConfigs ? Object.values(p.endpointConfigs)[0] : undefined)
     editBaseUrl.value = chatCfg?.baseUrl ?? chatCfg?.url ?? ''
 
-    const firstKey = p.apiKeys?.[0]?.key
-    if (firstKey) {
-      editApiKey.value = firstKey.length > 8 ? `${firstKey.slice(0, 4)}••••••••${firstKey.slice(-4)}` : '••••••••'
-    } else {
+    // Fetch existing API keys directly from sub-resource
+    try {
+      const keysRes = await props.httpClient.getJson<{ keys?: ProviderApiKeyEntry[] }>(
+        `/api/data/providers/${encodeURIComponent(id)}/api-keys`
+      )
+      const keys = keysRes?.keys ?? []
+      if (keys.length > 0 && keys[0]?.key) {
+        savedApiKey.value = keys[0].key
+        editApiKey.value = keys[0].key
+      } else {
+        savedApiKey.value = ''
+        editApiKey.value = ''
+      }
+    } catch {
+      savedApiKey.value = ''
       editApiKey.value = ''
     }
   }
@@ -395,11 +438,13 @@ const saveProviderDetails = async () => {
       endpointConfigs
     })
 
-    if (isApiKeyDirty.value && editApiKey.value.trim()) {
+    if (isApiKeyDirty.value && editApiKey.value.trim() && editApiKey.value.trim() !== savedApiKey.value) {
       const rawKey = editApiKey.value.trim()
       await props.httpClient.postJson(`/api/data/providers/${p.id}/api-keys`, {
         key: rawKey
       })
+      savedApiKey.value = rawKey
+      isApiKeyDirty.value = false
     }
 
     await loadProviders()
@@ -433,7 +478,7 @@ const testConnection = async () => {
   if (!selectedProvider.value) return
   testConnectionState.value = { loading: true }
   try {
-    const rawKey = isApiKeyDirty.value ? editApiKey.value.trim() : undefined
+    const rawKey = editApiKey.value.trim() || undefined
     const res = await props.httpClient.postJson<{
       ok: boolean
       latencyMs?: number
@@ -467,24 +512,41 @@ const testConnection = async () => {
   }
 }
 
+const testModel = async (m: ModelEntity) => {
+  testingModelId.value = m.id
+  try {
+    const res = await props.httpClient.postJson<{ ok: boolean; latencyMs?: number; error?: string }>(
+      '/api/webui/models/test',
+      {
+        modelId: m.id,
+        apiKey: editApiKey.value.trim() || undefined
+      }
+    )
+    if (res.ok) {
+      showToast(`✓ ${m.name || m.id}: ${res.latencyMs ?? 0}ms`)
+    } else {
+      showToast(`✗ ${m.name || m.id}: ${res.error || text('connectionFailed')}`)
+    }
+  } catch (err: unknown) {
+    showToast(`✗ ${m.name || m.id}: ${err instanceof Error ? err.message : text('connectionFailed')}`)
+  } finally {
+    testingModelId.value = ''
+  }
+}
+
 const pullModels = async () => {
   if (!selectedProvider.value) return
   const currentPid = selectedProvider.value.id
   isPullingModels.value = true
   try {
-    const res = await props.httpClient.getJson<{ models?: ModelEntity[] } | ModelEntity[]>(
-      `/api/data/providers/${currentPid}/models:resolve`
+    const res = await props.httpClient.postJson<{ models?: ModelEntity[] }>(
+      `/api/webui/providers/${encodeURIComponent(currentPid)}/fetch-models`,
+      {}
     )
-    const resolved = Array.isArray(res) ? res : res?.models ?? []
-    if (resolved.length > 0) {
-      await props.httpClient.postJson('/api/data/models:batch', {
-        models: resolved.map((m: ModelEntity) => ({
-          ...m,
-          providerId: currentPid
-        }))
-      })
-      await loadModels()
-      showToast(`${text('modelsPulled')}: ${resolved.length}`)
+    const fetched = res?.models ?? []
+    await loadModels()
+    if (fetched.length > 0) {
+      showToast(`${text('modelsPulled')}: ${fetched.length}`)
       emit('settingsChanged')
     } else {
       showToast(text('noModelsFound'))
@@ -561,8 +623,9 @@ const selectedPrompt = computed(() => {
 const loadPrompts = async () => {
   isLoadingPrompts.value = true
   try {
-    const list = await props.httpClient.getJson<PromptEntity[]>('/api/data/prompts')
-    prompts.value = Array.isArray(list) ? list : []
+    const res = await props.httpClient.getJson<{ items?: PromptEntity[] } | PromptEntity[]>('/api/data/prompts')
+    const list = Array.isArray(res) ? res : res?.items ?? []
+    prompts.value = list
     if (prompts.value.length > 0 && !selectedPromptId.value && prompts.value[0]) {
       selectPrompt(prompts.value[0].id)
     }
@@ -655,8 +718,9 @@ const isLoadingSkills = ref(false)
 const loadMcpServers = async () => {
   isLoadingMcp.value = true
   try {
-    const list = await props.httpClient.getJson<McpServerEntity[]>('/api/data/mcp-servers')
-    mcpServers.value = Array.isArray(list) ? list : []
+    const res = await props.httpClient.getJson<{ items?: McpServerEntity[] } | McpServerEntity[]>('/api/data/mcp-servers')
+    const list = Array.isArray(res) ? res : res?.items ?? []
+    mcpServers.value = list
   } catch (err) {
     console.error('Failed to load MCP servers:', err)
   } finally {
@@ -667,8 +731,9 @@ const loadMcpServers = async () => {
 const loadSkills = async () => {
   isLoadingSkills.value = true
   try {
-    const list = await props.httpClient.getJson<SkillEntity[]>('/api/data/skills')
-    skillsList.value = Array.isArray(list) ? list : []
+    const res = await props.httpClient.getJson<{ items?: SkillEntity[] } | SkillEntity[]>('/api/data/skills')
+    const list = Array.isArray(res) ? res : res?.items ?? []
+    skillsList.value = list
   } catch (err) {
     console.error('Failed to load skills:', err)
   } finally {
@@ -708,26 +773,40 @@ const toggleSkill = async (skill: SkillEntity) => {
 // 5. Usage Statistics Management
 // ==========================================
 const usageRecords = ref<AiUsageRecordItem[]>([])
-const isLoadingUsage = ref(false)
-
-const totalUsageStats = computed(() => {
-  let reqs = usageRecords.value.length
-  let input = 0
-  let output = 0
-  let total = 0
-  for (const r of usageRecords.value) {
-    input += r.inputTokens ?? 0
-    output += r.outputTokens ?? 0
-    total += r.totalTokens ?? (r.inputTokens ?? 0) + (r.outputTokens ?? 0)
-  }
-  return { requests: reqs, input, output, total }
+const usageBuckets = ref<AiUsageStatsBucket[]>([])
+const usageTotals = ref<{
+  requests: number
+  input: number
+  output: number
+  total: number
+}>({
+  requests: 0,
+  input: 0,
+  output: 0,
+  total: 0
 })
+const isLoadingUsage = ref(false)
 
 const loadUsageRecords = async () => {
   isLoadingUsage.value = true
   try {
-    const res = await props.httpClient.getJson<{ items?: AiUsageRecordItem[]; total?: number } | AiUsageRecordItem[]>(
-      '/api/data/ai-usage-records'
+    // 1. Database-wide aggregate statistics
+    const statsRes = await props.httpClient.getJson<AiUsageStatsResponse>(
+      '/api/data/ai-usage-records/stats?groupBy=model&metric=tokens'
+    )
+    if (statsRes?.totals) {
+      usageTotals.value = {
+        requests: statsRes.totals.requestCount ?? 0,
+        input: statsRes.totals.totalInputTokens ?? 0,
+        output: statsRes.totals.totalOutputTokens ?? 0,
+        total: statsRes.totals.totalTokens ?? 0
+      }
+    }
+    usageBuckets.value = statsRes?.buckets ?? []
+
+    // 2. Recent invocation items
+    const res = await props.httpClient.getJson<{ items?: AiUsageRecordItem[] } | AiUsageRecordItem[]>(
+      '/api/data/ai-usage-records?limit=50'
     )
     const list = Array.isArray(res) ? res : res?.items ?? []
     usageRecords.value = list
@@ -739,22 +818,20 @@ const loadUsageRecords = async () => {
 }
 
 // ==========================================
-// 6. Preferences & Web Search
+// 6. Preferences & Web Search & Context Management
 // ==========================================
-const preferences = ref<{
-  showEstimatedTokens: boolean
-  thoughtAutoCollapse: boolean
-  webSearchProvider: string
-  webSearchMaxResults: number
-  searchApiKey: string
-  searchApiHost: string
-}>({
+const preferences = ref<WebUiPreferences>({
   showEstimatedTokens: false,
   thoughtAutoCollapse: false,
   webSearchProvider: 'tavily',
   webSearchMaxResults: 5,
   searchApiKey: '',
-  searchApiHost: ''
+  searchApiHost: '',
+  contextManagementEnabled: true,
+  contextMaxMessages: null,
+  contextTruncateThreshold: 50000,
+  contextCompressEnabled: true,
+  contextCompressModelId: null
 })
 const isSavingPreferences = ref(false)
 
@@ -780,7 +857,12 @@ const loadPreferences = async () => {
         webSearchProvider: selectedEngine,
         webSearchMaxResults: data.webSearchMaxResults ?? 5,
         searchApiKey: override?.apiKey || '',
-        searchApiHost: override?.apiHost || ''
+        searchApiHost: override?.apiHost || '',
+        contextManagementEnabled: data.contextManagementEnabled !== false,
+        contextMaxMessages: data.contextMaxMessages ?? null,
+        contextTruncateThreshold: data.contextTruncateThreshold ?? 50000,
+        contextCompressEnabled: data.contextCompressEnabled !== false,
+        contextCompressModelId: data.contextCompressModelId ?? null
       }
     }
   } catch (err) {
@@ -796,10 +878,13 @@ const onWebSearchProviderChange = () => {
 const saveWebSearchPreferences = async () => {
   isSavingPreferences.value = true
   try {
+    const rawKey = (preferences.value.searchApiKey || '').trim()
+    const rawHost = (preferences.value.searchApiHost || '').trim()
     const providerOverrides = {
-      [preferences.value.webSearchProvider]: {
-        apiKey: preferences.value.searchApiKey.trim() || undefined,
-        apiHost: preferences.value.searchApiHost.trim() || undefined
+      ...(preferences.value.webSearchProviderOverrides ?? {}),
+      [preferences.value.webSearchProvider || 'tavily']: {
+        apiKey: rawKey || undefined,
+        apiHost: rawHost || undefined
       }
     }
 
@@ -812,6 +897,25 @@ const saveWebSearchPreferences = async () => {
     emit('settingsChanged')
   } catch (err: unknown) {
     showToast(err instanceof Error ? err.message : 'Save search settings failed')
+  } finally {
+    isSavingPreferences.value = false
+  }
+}
+
+const saveContextPreferences = async () => {
+  isSavingPreferences.value = true
+  try {
+    await props.httpClient.putJson('/api/webui/preferences', {
+      contextManagementEnabled: preferences.value.contextManagementEnabled,
+      contextMaxMessages: preferences.value.contextMaxMessages,
+      contextTruncateThreshold: preferences.value.contextTruncateThreshold,
+      contextCompressEnabled: preferences.value.contextCompressEnabled,
+      contextCompressModelId: preferences.value.contextCompressModelId || null
+    })
+    showToast(text('save') + ' ✓')
+    emit('settingsChanged')
+  } catch (err: unknown) {
+    showToast(err instanceof Error ? err.message : 'Save context settings failed')
   } finally {
     isSavingPreferences.value = false
   }
@@ -1224,14 +1328,26 @@ onMounted(() => {
                         <span class="model-row-name">{{ m.name || m.apiModelId || m.id }}</span>
                         <span class="model-row-id">{{ m.apiModelId || m.id }}</span>
                       </div>
-                      <label class="settings-switch">
-                        <input
-                          type="checkbox"
-                          :checked="m.isEnabled !== false"
-                          @change="toggleModelEnabled(m)"
-                        />
-                        <span class="settings-slider" />
-                      </label>
+                      <div class="model-row-controls">
+                        <button
+                          class="settings-btn-icon"
+                          type="button"
+                          :disabled="testingModelId === m.id"
+                          :title="text('testModel')"
+                          @click="testModel(m)"
+                        >
+                          <span v-if="testingModelId === m.id" class="spinner-inline" />
+                          <span v-else>⚡</span>
+                        </button>
+                        <label class="settings-switch">
+                          <input
+                            type="checkbox"
+                            :checked="m.isEnabled !== false"
+                            @change="toggleModelEnabled(m)"
+                          />
+                          <span class="settings-slider" />
+                        </label>
+                      </div>
                     </div>
                     <div v-if="currentProviderModels.length === 0" class="settings-empty-hint">
                       {{ text('noModelsConfigured') }}
@@ -1401,25 +1517,50 @@ onMounted(() => {
                 </button>
               </div>
 
+              <!-- Summary Cards (Direct from SQLite aggregate totals) -->
               <div class="usage-summary-grid">
                 <div class="usage-stat-card">
                   <span class="usage-stat-label">{{ text('totalRequests') }}</span>
-                  <span class="usage-stat-val">{{ totalUsageStats.requests }}</span>
+                  <span class="usage-stat-val">{{ usageTotals.requests.toLocaleString() }}</span>
                 </div>
                 <div class="usage-stat-card">
                   <span class="usage-stat-label">{{ text('totalTokens') }}</span>
-                  <span class="usage-stat-val text-primary">{{ totalUsageStats.total.toLocaleString() }}</span>
+                  <span class="usage-stat-val text-primary">{{ usageTotals.total.toLocaleString() }}</span>
                 </div>
                 <div class="usage-stat-card">
                   <span class="usage-stat-label">{{ text('inputTokens') }}</span>
-                  <span class="usage-stat-val">{{ totalUsageStats.input.toLocaleString() }}</span>
+                  <span class="usage-stat-val">{{ usageTotals.input.toLocaleString() }}</span>
                 </div>
                 <div class="usage-stat-card">
                   <span class="usage-stat-label">{{ text('outputTokens') }}</span>
-                  <span class="usage-stat-val">{{ totalUsageStats.output.toLocaleString() }}</span>
+                  <span class="usage-stat-val">{{ usageTotals.output.toLocaleString() }}</span>
                 </div>
               </div>
 
+              <!-- Top Model Usage Breakdown -->
+              <div v-if="usageBuckets.length > 0" class="usage-table-section">
+                <h4>{{ text('modelList') }}</h4>
+                <div class="usage-table-wrap">
+                  <div
+                    v-for="b in usageBuckets.slice(0, 10)"
+                    :key="b.modelId || b.providerId || ''"
+                    class="usage-table-row"
+                  >
+                    <div class="usage-row-model">
+                      <span class="usage-row-model-name">{{ b.modelId || 'Unknown Model' }}</span>
+                      <span class="usage-row-provider">{{ b.providerId || '-' }} · {{ b.requestCount ?? 0 }} requests</span>
+                    </div>
+                    <div class="usage-row-tokens">
+                      <span class="usage-token-badge">{{ (b.totalTokens ?? 0).toLocaleString() }} tok</span>
+                      <span class="usage-token-detail">
+                        in: {{ (b.totalInputTokens ?? 0).toLocaleString() }} / out: {{ (b.totalOutputTokens ?? 0).toLocaleString() }}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Recent Calls Table -->
               <div class="usage-table-section">
                 <h4>{{ text('recentUsageRecords') }}</h4>
                 <div class="usage-table-wrap">
@@ -1447,9 +1588,92 @@ onMounted(() => {
             </div>
           </div>
 
-          <!-- TAB 5: Preferences & Web Search -->
+          <!-- TAB 5: Preferences & Web Search & Context Management -->
           <div v-if="currentTab === 'preferences'" class="settings-tab-pane">
             <div class="preferences-panel">
+              <!-- Context Management Section -->
+              <div class="preference-section-block">
+                <div class="panel-section-header">
+                  <div>
+                    <h3>{{ text('contextManagementTitle') }}</h3>
+                    <p class="preference-section-desc">{{ text('contextManagementDesc') }}</p>
+                  </div>
+                  <button
+                    class="settings-btn settings-btn-primary"
+                    type="button"
+                    :disabled="isSavingPreferences"
+                    @click="saveContextPreferences"
+                  >
+                    {{ isSavingPreferences ? text('saving') : text('save') }}
+                  </button>
+                </div>
+
+                <div class="settings-form-grid">
+                  <div class="preference-item">
+                    <div class="preference-item-meta">
+                      <span class="preference-title">{{ text('contextManagementEnabled') }}</span>
+                    </div>
+                    <label class="settings-switch">
+                      <input
+                        v-model="preferences.contextManagementEnabled"
+                        type="checkbox"
+                      />
+                      <span class="settings-slider" />
+                    </label>
+                  </div>
+
+                  <div v-if="preferences.contextManagementEnabled" class="settings-form-row">
+                    <label class="settings-label">{{ text('contextMaxMessages') }}</label>
+                    <input
+                      v-model.number="preferences.contextMaxMessages"
+                      class="settings-input"
+                      type="number"
+                      min="1"
+                      step="1"
+                      :placeholder="text('unlimited')"
+                    />
+                    <span class="settings-field-hint">{{ text('contextMaxMessagesDesc') }}</span>
+                  </div>
+
+                  <div v-if="preferences.contextManagementEnabled" class="settings-form-row">
+                    <label class="settings-label">{{ text('contextTruncateThreshold') }}</label>
+                    <input
+                      v-model.number="preferences.contextTruncateThreshold"
+                      class="settings-input"
+                      type="number"
+                      min="1000"
+                      step="1000"
+                    />
+                    <span class="settings-field-hint">{{ text('contextTruncateThresholdDesc') }}</span>
+                  </div>
+
+                  <div v-if="preferences.contextManagementEnabled" class="preference-item">
+                    <div class="preference-item-meta">
+                      <span class="preference-title">{{ text('contextCompressEnabled') }}</span>
+                      <span class="preference-desc">{{ text('contextCompressEnabledDesc') }}</span>
+                    </div>
+                    <label class="settings-switch">
+                      <input
+                        v-model="preferences.contextCompressEnabled"
+                        type="checkbox"
+                      />
+                      <span class="settings-slider" />
+                    </label>
+                  </div>
+
+                  <div v-if="preferences.contextManagementEnabled && preferences.contextCompressEnabled" class="settings-form-row">
+                    <label class="settings-label">{{ text('contextCompressModel') }}</label>
+                    <select v-model="preferences.contextCompressModelId" class="settings-select">
+                      <option :value="null">{{ text('contextCompressModelFollow') }}</option>
+                      <option v-for="m in models" :key="m.id" :value="m.id">
+                        {{ m.name || m.apiModelId || m.id }}
+                      </option>
+                    </select>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Web Search Section -->
               <div class="preference-section-block">
                 <div class="panel-section-header">
                   <h3>{{ text('webSearchSettings') }}</h3>
@@ -1511,6 +1735,7 @@ onMounted(() => {
                 </div>
               </div>
 
+              <!-- General Display Switches -->
               <div class="preference-section-block">
                 <div class="panel-section-header">
                   <h3>{{ text('generalPreferences') }}</h3>
