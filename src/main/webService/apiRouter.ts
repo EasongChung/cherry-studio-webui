@@ -242,10 +242,12 @@ const isAllowedDataApiWritePath = (method: string, path: string) =>
   )
 
 const toQueryRecord = (searchParams: URLSearchParams) => {
-  const query: Record<string, string> = {}
+  const query: Record<string, string | number> = {}
 
   for (const [key, value] of searchParams.entries()) {
-    query[key] = value
+    // DataApi schemas expect numeric primitives (e.g. usage-record from/to);
+    // URL params arrive as strings, so coerce pure-numeric values up front.
+    query[key] = /^\d+$/.test(value) ? Number(value) : value
   }
 
   return query

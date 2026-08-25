@@ -322,6 +322,9 @@ const newModelId = ref('')
 const newModelName = ref('')
 const isAddingModel = ref(false)
 const isPullingModels = ref(false)
+const isRemovingStale = ref(false)
+const showFetchedModelsDialog = ref(false)
+const fetchedModelIds = ref<Set<string>>(new Set())
 
 const filteredProviders = computed(() => {
   const query = providerSearchQuery.value.trim().toLowerCase()
@@ -521,7 +524,10 @@ const pullModels = async () => {
     const fetched = res?.models ?? []
     await loadModels()
     if (fetched.length > 0) {
-      showToast(`${text('modelsPulled')}: ${fetched.length}`)
+      // Show the fetched list as an interactive picker (mirrors the desktop sync dialog)
+      // so the user can enable/disable each model instead of a blind bulk insert.
+      fetchedModelIds.value = new Set(fetched.map((m) => m.id))
+      showFetchedModelsDialog.value = true
       emit('settingsChanged')
     } else {
       showToast(text('noModelsFound'))
@@ -530,6 +536,39 @@ const pullModels = async () => {
     showToast(err instanceof Error ? err.message : 'Pull failed')
   } finally {
     isPullingModels.value = false
+  }
+}
+
+const toggleFetchedModel = async (m: ModelEntity, enabled: boolean) => {
+  try {
+    await props.httpClient.patchJson(`/api/data/models/${encodeURIComponent(m.id)}`, { isEnabled: enabled })
+    m.isEnabled = enabled
+    if (!enabled) {
+      fetchedModelIds.value.delete(m.id)
+    }
+  } catch (err: unknown) {
+    showToast(err instanceof Error ? err.message : 'Update model failed')
+  }
+}
+
+const removeStaleModels = async () => {
+  if (!selectedProvider.value || !fetchedModelIds.value.size) return
+  isRemovingStale.value = true
+  try {
+    const staleIds = currentProviderModels.value
+      .filter((m) => !fetchedModelIds.value.has(m.id))
+      .map((m) => m.id)
+    for (const id of staleIds) {
+      await props.httpClient.deleteJson(`/api/data/models/${encodeURIComponent(id)}`)
+    }
+    await loadModels()
+    showFetchedModelsDialog.value = false
+    showToast(`${text('modelsRemoved')}: ${staleIds.length}`)
+    emit('settingsChanged')
+  } catch (err: unknown) {
+    showToast(err instanceof Error ? err.message : 'Remove failed')
+  } finally {
+    isRemovingStale.value = false
   }
 }
 
@@ -1226,7 +1265,7 @@ onMounted(() => {
                         v-model="editApiKey"
                         class="settings-input"
                         type="password"
-                        placeholder="Leave empty to keep the saved key"
+                        :placeholder="text('apiKeyPlaceholder')"
                         @input="onApiKeyInput"
                       />
                     </div>
@@ -1295,6 +1334,56 @@ onMounted(() => {
                     >
                       {{ text('confirm') }}
                     </button>
+                  </div>
+
+                  <!-- Fetched models dialog: mirror the desktop sync dialog — enable/disable each
+                       fetched model inline and remove stale (no-longer-offered) models. -->
+                  <div v-if="showFetchedModelsDialog" class="fetched-models-dialog">
+                    <div class="fetched-models-header">
+                      <h5>{{ text('modelsPulled') }}: {{ fetchedModelIds.size }}</h5>
+                      <button
+                        class="settings-btn settings-btn-sm settings-btn-secondary"
+                        type="button"
+                        @click="showFetchedModelsDialog = false"
+                      >
+                        ×
+                      </button>
+                    </div>
+                    <p class="fetched-models-hint">{{ text('fetchedModelsHint') }}</p>
+                    <div class="fetched-models-list">
+                      <div v-for="m in currentProviderModels" :key="m.id" class="model-table-row">
+                        <div class="model-row-info">
+                          <span class="model-row-name">{{ m.name || m.apiModelId || m.id }}</span>
+                          <span class="model-row-id">{{ m.apiModelId || m.id }}</span>
+                        </div>
+                        <label class="settings-switch">
+                          <input
+                            type="checkbox"
+                            :checked="m.isEnabled !== false"
+                            @change="toggleFetchedModel(m, ($event.target as HTMLInputElement).checked)"
+                          />
+                          <span class="settings-slider" />
+                        </label>
+                      </div>
+                    </div>
+                    <footer class="fetched-models-footer">
+                      <button
+                        class="settings-btn settings-btn-sm settings-btn-danger"
+                        type="button"
+                        :disabled="isRemovingStale"
+                        :title="text('removeStaleModels')"
+                        @click="removeStaleModels"
+                      >
+                        🗑 {{ text('removeStaleModels') }}
+                      </button>
+                      <button
+                        class="settings-btn settings-btn-sm settings-btn-primary"
+                        type="button"
+                        @click="showFetchedModelsDialog = false"
+                      >
+                        ✓ {{ text('confirm') }}
+                      </button>
+                    </footer>
                   </div>
 
                   <div class="models-table-wrap">

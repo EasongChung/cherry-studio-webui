@@ -7181,6 +7181,67 @@
     border-color: #334155;
   }
 
+  /* Fetched models dialog (mirrors desktop sync dialog) */
+  .fetched-models-dialog {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    margin-bottom: 12px;
+    padding: 12px 14px;
+    background: #f0f7ff;
+    border: 1px solid #bfdbfe;
+    border-radius: 10px;
+  }
+
+  :root[data-webui-theme='dark'] .fetched-models-dialog {
+    background: #17263d;
+    border-color: #1e3a5f;
+  }
+
+  .fetched-models-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+
+    h5 {
+      margin: 0;
+      font-size: 13.5px;
+      font-weight: 600;
+      color: #1d4ed8;
+    }
+  }
+
+  :root[data-webui-theme='dark'] .fetched-models-header h5 {
+    color: #93c5fd;
+  }
+
+  .fetched-models-hint {
+    margin: 0;
+    font-size: 11.5px;
+    color: #64748b;
+  }
+
+  :root[data-webui-theme='dark'] .fetched-models-hint {
+    color: #94a3b8;
+  }
+
+  .fetched-models-list {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    max-height: 220px;
+    overflow-y: auto;
+    border: 1px solid var(--webui-divider, #e5e7eb);
+    border-radius: 8px;
+    padding: 4px;
+  }
+
+  .fetched-models-footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
   .models-table-wrap {
     display: flex;
     flex-direction: column;
