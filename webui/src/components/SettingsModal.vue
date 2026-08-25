@@ -26,14 +26,6 @@ interface AgentEntity {
 interface ProviderEndpointConfig {
   baseUrl?: string
   url?: string
-  apiKey?: string
-}
-
-interface ProviderApiKeyEntry {
-  id: string
-  key: string
-  label?: string
-  isEnabled?: boolean
 }
 
 interface ProviderEntity {
@@ -43,7 +35,6 @@ interface ProviderEntity {
   presetProviderId?: string
   defaultChatEndpoint?: string
   endpointConfigs?: Record<string, ProviderEndpointConfig>
-  apiKeys?: ProviderApiKeyEntry[]
 }
 
 interface ModelEntity {
@@ -323,9 +314,7 @@ const testingModelId = ref<string>('')
 const editProviderName = ref('')
 const editBaseUrl = ref('')
 const editApiKey = ref('')
-const savedApiKey = ref('')
 const isApiKeyDirty = ref(false)
-const showApiKeyPlain = ref(false)
 const editIsEnabled = ref(true)
 
 const showAddModelForm = ref(false)
@@ -377,12 +366,11 @@ const loadModels = async () => {
   }
 }
 
-const selectProvider = async (id: string) => {
+const selectProvider = (id: string) => {
   selectedProviderId.value = id
   testConnectionState.value = { loading: false }
   showAddModelForm.value = false
   isApiKeyDirty.value = false
-  showApiKeyPlain.value = false
 
   const p = providers.value.find((item) => item.id === id)
   if (p) {
@@ -394,23 +382,9 @@ const selectProvider = async (id: string) => {
       (p.endpointConfigs ? Object.values(p.endpointConfigs)[0] : undefined)
     editBaseUrl.value = chatCfg?.baseUrl ?? chatCfg?.url ?? ''
 
-    // Fetch existing API keys directly from sub-resource
-    try {
-      const keysRes = await props.httpClient.getJson<{ keys?: ProviderApiKeyEntry[] }>(
-        `/api/data/providers/${encodeURIComponent(id)}/api-keys`
-      )
-      const keys = keysRes?.keys ?? []
-      if (keys.length > 0 && keys[0]?.key) {
-        savedApiKey.value = keys[0].key
-        editApiKey.value = keys[0].key
-      } else {
-        savedApiKey.value = ''
-        editApiKey.value = ''
-      }
-    } catch {
-      savedApiKey.value = ''
-      editApiKey.value = ''
-    }
+    // A key is intentionally never returned to the browser. The main process uses the saved key
+    // when testing or fetching models, unless the user explicitly enters a replacement.
+    editApiKey.value = ''
   }
 }
 
@@ -438,13 +412,14 @@ const saveProviderDetails = async () => {
       endpointConfigs
     })
 
-    if (isApiKeyDirty.value && editApiKey.value.trim() && editApiKey.value.trim() !== savedApiKey.value) {
+    if (isApiKeyDirty.value && editApiKey.value.trim()) {
       const rawKey = editApiKey.value.trim()
       await props.httpClient.postJson(`/api/data/providers/${p.id}/api-keys`, {
         key: rawKey
       })
-      savedApiKey.value = rawKey
       isApiKeyDirty.value = false
+      // Never keep the entered key in component state after it has been persisted.
+      editApiKey.value = ''
     }
 
     await loadProviders()
@@ -486,7 +461,7 @@ const testConnection = async () => {
     }>('/api/webui/providers/test', {
       providerId: selectedProvider.value.id,
       baseUrl: editBaseUrl.value.trim() || undefined,
-      apiKey: rawKey
+      ...(rawKey ? { apiKey: rawKey } : {})
     })
 
     if (res.ok) {
@@ -518,8 +493,8 @@ const testModel = async (m: ModelEntity) => {
     const res = await props.httpClient.postJson<{ ok: boolean; latencyMs?: number; error?: string }>(
       '/api/webui/models/test',
       {
-        modelId: m.id,
-        apiKey: editApiKey.value.trim() || undefined
+        uniqueModelId: m.id,
+        ...(editApiKey.value.trim() ? { apiKey: editApiKey.value.trim() } : {})
       }
     )
     if (res.ok) {
@@ -575,13 +550,12 @@ const addCustomModel = async () => {
   if (!selectedProvider.value || !newModelId.value.trim()) return
   isAddingModel.value = true
   try {
-    await props.httpClient.postJson('/api/data/models', {
-      id: `${selectedProvider.value.id}:${newModelId.value.trim()}`,
+    await props.httpClient.postJson('/api/data/models', [{
       providerId: selectedProvider.value.id,
-      apiModelId: newModelId.value.trim(),
+      modelId: newModelId.value.trim(),
       name: newModelName.value.trim() || newModelId.value.trim(),
       isEnabled: true
-    })
+    }])
     newModelId.value = ''
     newModelName.value = ''
     showAddModelForm.value = false
@@ -791,8 +765,15 @@ const loadUsageRecords = async () => {
   isLoadingUsage.value = true
   try {
     // 1. Database-wide aggregate statistics
+    const statsQuery = new URLSearchParams({
+      groupBy: 'model',
+      metric: 'tokens',
+      from: String(Date.now() - 365 * 24 * 60 * 60 * 1000),
+      to: String(Date.now()),
+      limit: '50'
+    })
     const statsRes = await props.httpClient.getJson<AiUsageStatsResponse>(
-      '/api/data/ai-usage-records/stats?groupBy=model&metric=tokens'
+      `/api/data/ai-usage-records/stats?${statsQuery.toString()}`
     )
     if (statsRes?.totals) {
       usageTotals.value = {
@@ -805,8 +786,13 @@ const loadUsageRecords = async () => {
     usageBuckets.value = statsRes?.buckets ?? []
 
     // 2. Recent invocation items
+    const recentQuery = new URLSearchParams({
+      limit: '50',
+      from: String(Date.now() - 365 * 24 * 60 * 60 * 1000),
+      to: String(Date.now())
+    })
     const res = await props.httpClient.getJson<{ items?: AiUsageRecordItem[] } | AiUsageRecordItem[]>(
-      '/api/data/ai-usage-records?limit=50'
+      `/api/data/ai-usage-records?${recentQuery.toString()}`
     )
     const list = Array.isArray(res) ? res : res?.items ?? []
     usageRecords.value = list
@@ -1239,17 +1225,10 @@ onMounted(() => {
                       <input
                         v-model="editApiKey"
                         class="settings-input"
-                        :type="showApiKeyPlain ? 'text' : 'password'"
-                        placeholder="sk-..."
+                        type="password"
+                        placeholder="Leave empty to keep the saved key"
                         @input="onApiKeyInput"
                       />
-                      <button
-                        class="settings-btn settings-btn-sm"
-                        type="button"
-                        @click="showApiKeyPlain = !showApiKeyPlain"
-                      >
-                        {{ showApiKeyPlain ? '🙈' : '👁️' }}
-                      </button>
                     </div>
                   </div>
 

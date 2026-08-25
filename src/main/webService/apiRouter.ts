@@ -229,7 +229,6 @@ const writableDataApiPatterns = [
   { pattern: /^\/providers\/[^/]+\/api-keys$/, methods: ['POST', 'PUT'] },
   { pattern: /^\/providers\/[^/]+\/api-keys\/[^/]+$/, methods: ['PATCH', 'DELETE'] },
   { pattern: /^\/models$/, methods: ['POST'] },
-  { pattern: /^\/models:batch$/, methods: ['POST'] },
   { pattern: /^\/models\/[^/]+$/, methods: ['PATCH', 'PUT', 'DELETE'] },
   { pattern: /^\/prompts$/, methods: ['POST'] },
   { pattern: /^\/prompts\/[^/]+$/, methods: ['PATCH', 'DELETE'] },
@@ -993,14 +992,16 @@ export const createWebUiApiRouter = ({
           .filter((m) => Boolean(m.modelId))
 
         if (modelsDto.length > 0) {
-          await ApiServer.getInstance().handleRequest({
+          const saveResponse = await ApiServer.getInstance().handleRequest({
             id: randomUUID(),
             method: 'POST',
-            path: '/models:batch',
-            body: { models: modelsDto },
+            path: '/models',
+            body: modelsDto,
             metadata: { timestamp: Date.now() }
           })
-          sseRelay.broadcast({ event: 'sync', data: { reason: 'settings-updated' } })
+          if (saveResponse.status >= 200 && saveResponse.status < 300) {
+            sseRelay.broadcast({ event: 'sync', data: { reason: 'settings-updated' } })
+          }
         }
 
         return { status: 200, body: { models: modelsDto } }
@@ -1017,15 +1018,17 @@ export const createWebUiApiRouter = ({
 
     if (pathname === webUiModelTestPath) {
       if (method !== 'POST') return methodNotAllowed(['POST'])
-      const body = (await readJsonBody(request)) as { modelId?: string; apiKey?: string; timeout?: number } | undefined
-      if (!body?.modelId) {
-        return { status: 400, body: { code: 'WEBUI_INVALID_MODEL', message: 'modelId is required' } }
+      const body = (await readJsonBody(request)) as
+        | { uniqueModelId?: string; apiKey?: string; timeout?: number }
+        | undefined
+      if (!body?.uniqueModelId) {
+        return { status: 400, body: { code: 'WEBUI_INVALID_MODEL', message: 'uniqueModelId is required' } }
       }
 
       try {
         const aiService = application.get('AiService')
         const result = await aiService.checkModel({
-          modelId: body.modelId,
+          uniqueModelId: body.uniqueModelId as UniqueModelId,
           apiKeyOverride: body.apiKey?.trim() || undefined,
           timeout: body.timeout ?? 15000
         })
@@ -1044,7 +1047,7 @@ export const createWebUiApiRouter = ({
     if (pathname === webUiProviderTestPath) {
       if (method !== 'POST') return methodNotAllowed(['POST'])
       const body = (await readJsonBody(request)) as
-        | { providerId?: string; baseUrl?: string; apiKey?: string; modelId?: string }
+        | { providerId?: string; baseUrl?: string; apiKey?: string; modelId?: string; uniqueModelId?: string }
         | undefined
       if (!body || typeof body !== 'object') {
         return { status: 400, body: { code: 'WEBUI_INVALID_BODY', message: 'Request body must be JSON' } }
@@ -1052,10 +1055,10 @@ export const createWebUiApiRouter = ({
 
       const startTime = Date.now()
       try {
-        if (body.modelId) {
+        if (body.modelId || body.uniqueModelId) {
           const aiService = application.get('AiService')
           const result = await aiService.checkModel({
-            modelId: body.modelId,
+            uniqueModelId: (body.uniqueModelId ?? body.modelId) as UniqueModelId,
             apiKeyOverride: body.apiKey?.trim() || undefined,
             timeout: 15000
           })
