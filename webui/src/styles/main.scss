@@ -138,10 +138,156 @@
   }
 
   .conversation-list {
+    position: relative;
     display: grid;
     grid-template-rows: auto auto auto minmax(0, 1fr);
-    overflow: hidden;
+    overflow: visible;
     border-right: 1px solid #e2e8f0;
+  }
+
+  /* Icon-rail collapse handle — floats over the sidebar's right edge and reveals
+     on hover so the chat border doubles as the affordance. */
+  .sidebar-collapse-handle {
+    position: absolute;
+    top: 50%;
+    right: -13px;
+    z-index: 12;
+    display: grid;
+    place-items: center;
+    width: 26px;
+    height: 44px;
+    color: #64748b;
+    background: #ffffff;
+    border: 1px solid var(--webui-divider, #e5e7eb);
+    border-radius: 8px;
+    box-shadow: 0 2px 8px rgb(15 23 42 / 14%);
+    cursor: pointer;
+    opacity: 0;
+    transform: translateY(-50%);
+    transition: opacity 140ms ease, background 140ms ease;
+
+    svg {
+      width: 14px;
+      height: 14px;
+    }
+
+    &:hover,
+    &:focus-visible {
+      color: #0f172a;
+      background: #f1f5f9;
+      opacity: 1;
+    }
+  }
+
+  .sidebar-collapse-handle-collapsed {
+    /* Keep the expand button visible while collapsed (rail has no other affordance). */
+    right: -30px;
+    opacity: 1;
+
+    &:hover {
+      background: #e2e8f0;
+    }
+  }
+
+  :root[data-webui-theme='dark'] .sidebar-collapse-handle {
+    color: #94a3b8;
+    background: #1e293b;
+    border-color: #334155;
+
+    &:hover,
+    &:focus-visible {
+      color: #f8fafc;
+      background: #334155;
+    }
+  }
+
+  /* Collapsed icon rail: single column, items shrink to icon-sized tiles that
+     clip their leading content (no ellipsis by design). */
+  .conversation-list-collapsed {
+    width: 56px;
+    min-width: 56px;
+    padding-inline: 6px;
+
+    .panel-header,
+    .panel-actions,
+    .mobile-close-button {
+      display: none;
+    }
+
+    .new-chat-button {
+      padding: 0;
+      font-size: 0;
+      aspect-ratio: 1;
+    }
+
+    .conversation-group-header {
+      grid-template-columns: minmax(0, 1fr);
+
+      .conversation-group-new-button,
+      .conversation-folder-icon {
+        display: none;
+      }
+    }
+
+    .conversation-group-toggle {
+      grid-template-columns: minmax(0, 1fr);
+      justify-items: center;
+      padding: 4px 0;
+
+      .conversation-group-name {
+        display: none;
+      }
+    }
+
+    .conversation-item-wrap,
+    .conversation-item {
+      width: 100%;
+      min-width: 0;
+      padding-inline: 4px;
+    }
+
+    .conversation-item {
+      display: block;
+      overflow: hidden;
+      white-space: nowrap;
+
+      /* Leading-content-only tiles: hard clip, no ellipsis. */
+      .conversation-title,
+      .conversation-meta {
+        display: block;
+        max-width: 40px;
+        overflow: hidden;
+        white-space: nowrap;
+      }
+
+      .conversation-meta {
+        visibility: hidden;
+        height: 0;
+        margin: 0;
+      }
+    }
+
+    .conversation-actions,
+    .conversation-group-show-more-button span:last-child {
+      display: none;
+    }
+
+    .conversation-group-show-more-button {
+      justify-content: center;
+    }
+
+    .conversation-list-footer {
+      justify-content: center;
+
+      .sidebar-settings-label {
+        display: none;
+      }
+    }
+
+    .sidebar-settings-button {
+      justify-content: center;
+      padding-inline: 0;
+    }
   }
 
   .conversation-group {
@@ -6157,8 +6303,14 @@
       border: 0;
       border-right: 1px solid #e5e7eb;
       box-shadow: 16px 0 36px rgb(15 23 42 / 20%);
+      overflow: hidden;
       transform: translateX(-105%);
       transition: transform 160ms ease-out;
+    }
+
+    /* Icon-rail collapse is a desktop affordance — no edge handle on touch drawers. */
+    .sidebar-collapse-handle {
+      display: none;
     }
 
     .conversation-list-open {
@@ -7744,6 +7896,141 @@
     gap: 16px;
   }
 
+  .usage-header-controls {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .usage-range-switcher {
+    display: inline-flex;
+    padding: 2px;
+    background: rgb(0 0 0 / 5%);
+    border-radius: 8px;
+  }
+
+  :root[data-webui-theme='dark'] .usage-range-switcher {
+    background: rgb(255 255 255 / 8%);
+  }
+
+  .usage-range-option {
+    padding: 4px 12px;
+    color: #64748b;
+    font-size: 12px;
+    font-weight: 500;
+    background: transparent;
+    border: 0;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: all 120ms ease;
+
+    &:hover {
+      color: inherit;
+    }
+  }
+
+  .usage-range-option-active {
+    color: #1d4ed8 !important;
+    font-weight: 600;
+    background: #ffffff !important;
+    box-shadow: 0 1px 3px rgb(15 23 42 / 12%);
+  }
+
+  :root[data-webui-theme='dark'] .usage-range-option {
+    color: #94a3b8;
+  }
+
+  :root[data-webui-theme='dark'] .usage-range-option-active {
+    color: #93c5fd !important;
+    background: #334155 !important;
+  }
+
+  /* Model usage bar chart (desktop-style ranking) */
+  .usage-bar-chart {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 14px 16px;
+    background: #f8fafc;
+    border: 1px solid var(--webui-divider, #e5e7eb);
+    border-radius: 10px;
+  }
+
+  :root[data-webui-theme='dark'] .usage-bar-chart {
+    background: #182234;
+    border-color: #334155;
+  }
+
+  .usage-bar-row {
+    display: grid;
+    grid-template-columns: minmax(140px, 220px) minmax(80px, 1fr) auto;
+    gap: 6px 14px;
+    align-items: center;
+  }
+
+  .usage-bar-meta {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    min-width: 0;
+  }
+
+  .usage-bar-name {
+    font-size: 12.5px;
+    font-weight: 500;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .usage-bar-tokens {
+    margin-left: 8px;
+    font-size: 11.5px;
+    font-weight: 600;
+    color: #3b82f6;
+    white-space: nowrap;
+  }
+
+  :root[data-webui-theme='dark'] .usage-bar-tokens {
+    color: #60a5fa;
+  }
+
+  .usage-bar-track {
+    height: 8px;
+    overflow: hidden;
+    background: rgb(148 163 184 / 22%);
+    border-radius: 4px;
+  }
+
+  .usage-bar-fill {
+    display: block;
+    height: 100%;
+    background: linear-gradient(90deg, #60a5fa, #3b82f6);
+    border-radius: 4px;
+    transition: width 300ms ease-out;
+  }
+
+  .usage-bar-requests {
+    font-size: 11px;
+    color: #64748b;
+    white-space: nowrap;
+  }
+
+  :root[data-webui-theme='dark'] .usage-bar-requests {
+    color: #94a3b8;
+  }
+
+  @media (max-width: 720px) {
+    .usage-bar-row {
+      grid-template-columns: 1fr auto;
+
+      .usage-bar-requests {
+        grid-column: 1 / -1;
+        order: 3;
+      }
+    }
+  }
+
   .usage-summary-grid {
     display: grid;
     grid-template-columns: repeat(4, 1fr);
@@ -7754,10 +8041,21 @@
     display: flex;
     flex-direction: column;
     gap: 4px;
-    padding: 12px 14px;
+    padding: 14px 16px;
     background: #f8fafc;
     border: 1px solid var(--webui-divider, #e5e7eb);
-    border-radius: 10px;
+    border-radius: 12px;
+    transition: box-shadow 150ms ease, transform 150ms ease;
+  }
+
+  .usage-stat-card-primary {
+    background: linear-gradient(135deg, #eff6ff, #f0f9ff);
+    border-color: #bfdbfe;
+  }
+
+  :root[data-webui-theme='dark'] .usage-stat-card-primary {
+    background: linear-gradient(135deg, #17263d, #16283a);
+    border-color: #1e3a5f;
   }
 
   :root[data-webui-theme='dark'] .usage-stat-card {
@@ -7884,13 +8182,33 @@
     color: #94a3b8;
   }
 
-  /* Responsive for Settings Modal */
+  /* Responsive for Settings Modal — mobile becomes a full standalone settings page,
+     not a dialog: the backdrop drops its dimming so it reads as a page transition. */
   @media (max-width: 640px) {
+    .settings-modal-backdrop {
+      padding: 0;
+      background: var(--webui-page-bg, #f6f7fb);
+      backdrop-filter: none;
+    }
+
+    :root[data-webui-theme='dark'] .settings-modal-backdrop {
+      background: #111827;
+    }
+
     .settings-modal {
       width: 100vw;
       height: 100dvh;
       border-radius: 0;
       border: 0;
+      box-shadow: none;
+    }
+
+    .settings-modal-header {
+      padding: calc(10px + env(safe-area-inset-top)) 14px 10px;
+      position: sticky;
+      top: 0;
+      z-index: 2;
+      background: inherit;
     }
 
     .settings-modal-body {
@@ -7903,6 +8221,18 @@
       border-right: 0;
       border-bottom: 1px solid var(--webui-divider, #e5e7eb);
       overflow-x: auto;
+      -webkit-overflow-scrolling: touch;
+
+      /* Hide scrollbar on mobile for a cleaner segmented-control look. */
+      scrollbar-width: none;
+      &::-webkit-scrollbar {
+        display: none;
+      }
+    }
+
+    .settings-nav-item {
+      flex-shrink: 0;
+      white-space: nowrap;
     }
 
     .providers-layout,
@@ -7926,5 +8256,10 @@
 
     .usage-summary-grid {
       grid-template-columns: 1fr 1fr;
+    }
+
+    .usage-header-controls {
+      width: 100%;
+      justify-content: space-between;
     }
   }

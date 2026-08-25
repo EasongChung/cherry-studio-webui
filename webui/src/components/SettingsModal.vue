@@ -799,15 +799,25 @@ const usageTotals = ref<{
   total: 0
 })
 const isLoadingUsage = ref(false)
+const usageRangeDays = ref<1 | 7 | 30 | 365>(30)
+
+const usageWindowMs = computed(() => {
+  const days = usageRangeDays.value
+  return days === 1 ? 24 * 60 * 60 * 1000 : days * 24 * 60 * 60 * 1000
+})
+
+const usageMaxBucketTokens = computed(() =>
+  Math.max(1, ...usageBuckets.value.map((b) => b.totalTokens ?? 0))
+)
 
 const loadUsageRecords = async () => {
   isLoadingUsage.value = true
   try {
-    // 1. Database-wide aggregate statistics
+    // 1. Database-wide aggregate statistics for the selected window
     const statsQuery = new URLSearchParams({
       groupBy: 'model',
       metric: 'tokens',
-      from: String(Date.now() - 365 * 24 * 60 * 60 * 1000),
+      from: String(Date.now() - usageWindowMs.value),
       to: String(Date.now()),
       limit: '50'
     })
@@ -824,10 +834,10 @@ const loadUsageRecords = async () => {
     }
     usageBuckets.value = statsRes?.buckets ?? []
 
-    // 2. Recent invocation items
+    // 2. Recent invocation items (same window as the stats query)
     const recentQuery = new URLSearchParams({
       limit: '50',
-      from: String(Date.now() - 365 * 24 * 60 * 60 * 1000),
+      from: String(Date.now() - usageWindowMs.value),
       to: String(Date.now())
     })
     const res = await props.httpClient.getJson<{ items?: AiUsageRecordItem[] } | AiUsageRecordItem[]>(
@@ -1575,14 +1585,30 @@ onMounted(() => {
             <div class="usage-panel">
               <div class="panel-section-header">
                 <h3>{{ text('usageStatistics') }}</h3>
-                <button
-                  class="settings-btn settings-btn-sm settings-btn-secondary"
-                  type="button"
-                  :disabled="isLoadingUsage"
-                  @click="loadUsageRecords"
-                >
-                  🔄 {{ isLoadingUsage ? text('loading') : text('refresh') }}
-                </button>
+                <div class="usage-header-controls">
+                  <div class="usage-range-switcher" role="tablist">
+                    <button
+                      v-for="d in ([1, 7, 30, 365] as const)"
+                      :key="d"
+                      class="usage-range-option"
+                      :class="{ 'usage-range-option-active': usageRangeDays === d }"
+                      type="button"
+                      role="tab"
+                      :aria-selected="usageRangeDays === d"
+                      @click="usageRangeDays = d; loadUsageRecords()"
+                    >
+                      {{ d === 1 ? text('rangeToday') : text(`rangeDays${d}` as TextKey) }}
+                    </button>
+                  </div>
+                  <button
+                    class="settings-btn settings-btn-sm settings-btn-secondary"
+                    type="button"
+                    :disabled="isLoadingUsage"
+                    @click="loadUsageRecords"
+                  >
+                    🔄 {{ isLoadingUsage ? text('loading') : text('refresh') }}
+                  </button>
+                </div>
               </div>
 
               <!-- Summary Cards (Direct from SQLite aggregate totals) -->
@@ -1591,7 +1617,7 @@ onMounted(() => {
                   <span class="usage-stat-label">{{ text('totalRequests') }}</span>
                   <span class="usage-stat-val">{{ usageTotals.requests.toLocaleString() }}</span>
                 </div>
-                <div class="usage-stat-card">
+                <div class="usage-stat-card usage-stat-card-primary">
                   <span class="usage-stat-label">{{ text('totalTokens') }}</span>
                   <span class="usage-stat-val text-primary">{{ usageTotals.total.toLocaleString() }}</span>
                 </div>
@@ -1605,25 +1631,26 @@ onMounted(() => {
                 </div>
               </div>
 
-              <!-- Top Model Usage Breakdown -->
+              <!-- Top Model Usage Breakdown with bar chart -->
               <div v-if="usageBuckets.length > 0" class="usage-table-section">
                 <h4>{{ text('modelList') }}</h4>
-                <div class="usage-table-wrap">
+                <div class="usage-bar-chart">
                   <div
                     v-for="b in usageBuckets.slice(0, 10)"
                     :key="b.modelId || b.providerId || ''"
-                    class="usage-table-row"
+                    class="usage-bar-row"
                   >
-                    <div class="usage-row-model">
-                      <span class="usage-row-model-name">{{ b.modelId || 'Unknown Model' }}</span>
-                      <span class="usage-row-provider">{{ b.providerId || '-' }} · {{ b.requestCount ?? 0 }} requests</span>
+                    <div class="usage-bar-meta">
+                      <span class="usage-bar-name" :title="b.modelId || ''">{{ b.modelId || 'Unknown Model' }}</span>
+                      <span class="usage-bar-tokens">{{ (b.totalTokens ?? 0).toLocaleString() }} tok</span>
                     </div>
-                    <div class="usage-row-tokens">
-                      <span class="usage-token-badge">{{ (b.totalTokens ?? 0).toLocaleString() }} tok</span>
-                      <span class="usage-token-detail">
-                        in: {{ (b.totalInputTokens ?? 0).toLocaleString() }} / out: {{ (b.totalOutputTokens ?? 0).toLocaleString() }}
-                      </span>
+                    <div class="usage-bar-track">
+                      <span
+                        class="usage-bar-fill"
+                        :style="{ width: `${Math.max(2, Math.round(((b.totalTokens ?? 0) / usageMaxBucketTokens) * 100))}%` }"
+                      />
                     </div>
+                    <span class="usage-bar-requests">{{ b.requestCount ?? 0 }} req · in {{ (b.totalInputTokens ?? 0).toLocaleString() }} / out {{ (b.totalOutputTokens ?? 0).toLocaleString() }}</span>
                   </div>
                 </div>
               </div>

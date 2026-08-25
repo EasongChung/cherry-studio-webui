@@ -195,6 +195,17 @@ const App = defineComponent({
     const languageOverride = ref(false)
     const languagePickerOpen = ref(false)
     const settingsModalOpen = ref(false)
+    /** Icon-rail collapse: sidebar shrinks to a single icon column (persisted). */
+    const sidebarCollapsed = ref(window.localStorage.getItem('cherry-webui.sidebar-collapsed') === '1')
+    const toggleSidebarCollapsed = () => {
+      sidebarCollapsed.value = !sidebarCollapsed.value
+      window.localStorage.setItem('cherry-webui.sidebar-collapsed', sidebarCollapsed.value ? '1' : '0')
+      if (sidebarCollapsed.value) {
+        languagePickerOpen.value = false
+        closeConversationMenu()
+        closeQuickPanel()
+      }
+    }
     const authRequired = ref(false)
     const isAuthenticated = ref(true)
     const authKeyDraft = ref('')
@@ -5468,10 +5479,28 @@ const App = defineComponent({
               h(
                 'section',
                 {
-                  class: ['conversation-list', { 'conversation-list-open': mobileSidebarOpen.value }],
+                  class: [
+                    'conversation-list',
+                    {
+                      'conversation-list-open': mobileSidebarOpen.value,
+                      'conversation-list-collapsed': sidebarCollapsed.value
+                    }
+                  ],
                   'aria-label': text('newConversation')
                 },
                 [
+                  h(
+                    'button',
+                    {
+                      class: ['sidebar-collapse-handle', { 'sidebar-collapse-handle-collapsed': sidebarCollapsed.value }],
+                      type: 'button',
+                      title: sidebarCollapsed.value ? text('expandSidebar') : text('collapseSidebar'),
+                      'aria-label': sidebarCollapsed.value ? text('expandSidebar') : text('collapseSidebar'),
+                      'aria-pressed': sidebarCollapsed.value,
+                      onClick: toggleSidebarCollapsed
+                    },
+                    renderActionIcon(sidebarCollapsed.value ? 'menu' : 'back')
+                  ),
                   h('header', { class: 'panel-header' }, [
                     h('img', { class: 'brand-logo', src: webUiLogoPath, alt: 'Cherry Studio' }),
                     h('div', [h('p', { class: 'eyebrow' }, 'Cherry Studio'), h('h1', text('webui'))]),
