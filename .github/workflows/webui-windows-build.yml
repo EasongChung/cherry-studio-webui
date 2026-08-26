@@ -135,7 +135,7 @@ jobs:
         uses: ncipollo/release-action@v1
         with:
           allowUpdates: true
-          artifacts: "dist/*-setup.exe,dist/*-portable.exe"
+          artifacts: "dist/*-${{ steps.release-tag.outputs.tag }}.exe"
           commit: ${{ github.sha }}
           makeLatest: false
           name: Cherry Studio WebUI ${{ steps.release-tag.outputs.tag }}
@@ -148,5 +148,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: cherry-studio-webui-windows-portable-all-arch
-          path: dist/*-portable.exe
+          path: dist/*-portable-${{ steps.release-tag.outputs.tag }}.exe
           if-no-files-found: error
