@@ -5,7 +5,6 @@ import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 
 import { application } from '@application'
-import { createAgent } from '@main/ai/agents/createAgent'
 import { agentService } from '@data/services/AgentService'
 import { agentSessionMessageService } from '@data/services/AgentSessionMessageService'
 import { agentSessionService } from '@data/services/AgentSessionService'
