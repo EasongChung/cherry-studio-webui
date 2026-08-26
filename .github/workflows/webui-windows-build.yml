@@ -121,6 +121,16 @@ jobs:
             "tag=$inputTag" >> $env:GITHUB_OUTPUT
           }
 
+      - name: Append release tag to package names
+        shell: pwsh
+        run: |
+          $tag = "${{ steps.release-tag.outputs.tag }}"
+          Get-ChildItem dist -Filter *.exe | ForEach-Object {
+            $newName = $_.Name -replace '\.exe$', "-$tag.exe"
+            Rename-Item -LiteralPath $_.FullName -NewName $newName
+          }
+          Get-ChildItem dist -Filter *.exe | Select-Object -ExpandProperty Name
+
       - name: Upload setup and portable to Release
         uses: ncipollo/release-action@v1
         with:
