@@ -5,6 +5,7 @@ import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 
 import { application } from '@application'
+import { createAgent } from '@main/ai/agents/createAgent'
 import { agentService } from '@data/services/AgentService'
 import { agentSessionMessageService } from '@data/services/AgentSessionMessageService'
 import { agentSessionService } from '@data/services/AgentSessionService'
@@ -188,6 +189,7 @@ const webUiPreferencesPath = '/api/webui/preferences'
 const webUiProviderTestPath = '/api/webui/providers/test'
 const webUiModelTestPath = '/api/webui/models/test'
 const webUiProviderFetchModelsPath = /^\/api\/webui\/providers\/([^/]+)\/fetch-models$/
+const webUiAgentDeletePath = /^\/api\/webui\/agents\/([^/]+)$/
 const webUiApiRetryPath = /^\/api\/webui\/api-retry\/([^/]+)$/
 const webUiStreamCachePath = /^\/api\/webui\/stream-cache\/([^/]+)$/
 const sessionMessagePath = /^\/api\/agent-sessions\/([^/]+)\/messages$/
@@ -687,6 +689,7 @@ export const createWebUiApiRouter = ({
     const workspaceFilesMatch = pathname.match(sessionWorkspaceFilesPath)
     const workspaceFileMatch = pathname.match(sessionWorkspaceFilePath)
     const workspacePreviewMatch = pathname.match(sessionWorkspacePreviewPath)
+    const agentDeleteMatch = pathname.match(webUiAgentDeletePath)
 
     if (pathname === '/api/auth/status') {
       if (method !== 'GET') return methodNotAllowed(['GET'])
@@ -966,6 +969,22 @@ export const createWebUiApiRouter = ({
       }
 
       return methodNotAllowed(['GET', 'PUT'])
+    }
+
+    if (agentDeleteMatch) {
+      if (method !== 'DELETE') return methodNotAllowed(['DELETE'])
+      const agentId = decodeURIComponent(agentDeleteMatch[1] ?? '')
+      if (!agentId) return { status: 400, body: { code: 'WEBUI_INVALID_AGENT', message: 'Agent ID missing' } }
+      try {
+        const result = agentService.deleteAgent(agentId, { deleteSessions: true })
+        if (!result.deleted) {
+          return { status: 404, body: { code: 'WEBUI_AGENT_NOT_FOUND', message: 'Agent not found' } }
+        }
+        sseRelay.broadcast({ event: 'sync', data: { reason: 'settings-updated' } })
+        return { status: 200, body: result }
+      } catch (error) {
+        return { status: 500, body: { code: 'WEBUI_AGENT_DELETE_FAILED', message: error instanceof Error ? error.message : 'Delete agent failed' } }
+      }
     }
 
     const fetchModelsMatch = pathname.match(webUiProviderFetchModelsPath)

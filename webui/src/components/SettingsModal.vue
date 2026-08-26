@@ -93,6 +93,9 @@ interface AiUsageStatsBucket {
   totalTokens?: number
   totalInputTokens?: number
   totalOutputTokens?: number
+  totalNoCacheTokens?: number
+  totalCacheReadTokens?: number
+  totalCacheWriteTokens?: number
   requestCount?: number
 }
 
@@ -101,6 +104,9 @@ interface AiUsageStatsResponse {
     totalTokens?: number
     totalInputTokens?: number
     totalOutputTokens?: number
+    totalNoCacheTokens?: number
+    totalCacheReadTokens?: number
+    totalCacheWriteTokens?: number
     requestCount?: number
   }
   buckets?: AiUsageStatsBucket[]
@@ -134,7 +140,7 @@ const emit = defineEmits<{
   (e: 'settingsChanged'): void
 }>()
 
-const currentTab = ref<SettingsTabId>('agents')
+const currentTab = ref<SettingsTabId>('providers')
 const text = (key: TextKey) => {
   const langKey = (props.language in textPacks ? props.language : fallbackLanguage) as keyof typeof textPacks
   return textPacks[langKey]?.[key] ?? textPacks[fallbackLanguage][key]
@@ -283,7 +289,7 @@ const createAgent = async () => {
 
 const deleteAgent = async (id: string) => {
   try {
-    await props.httpClient.deleteJson(`/api/data/agents/${encodeURIComponent(id)}`)
+    await props.httpClient.deleteJson(`/api/webui/agents/${encodeURIComponent(id)}`)
     selectedAgentId.value = ''
     await loadAgents()
     showToast(text('agentDeleted'))
@@ -727,6 +733,8 @@ const mcpServers = ref<McpServerEntity[]>([])
 const skillsList = ref<SkillEntity[]>([])
 const isLoadingMcp = ref(false)
 const isLoadingSkills = ref(false)
+/** Sub-group toggle within the MCP & Skills tab. */
+const mcpSkillGroup = ref<'mcp' | 'skills'>('mcp')
 
 const loadMcpServers = async () => {
   isLoadingMcp.value = true
@@ -792,19 +800,66 @@ const usageTotals = ref<{
   input: number
   output: number
   total: number
+  noCache: number
+  cacheRead: number
+  cacheWrite: number
 }>({
   requests: 0,
   input: 0,
   output: 0,
-  total: 0
+  total: 0,
+  noCache: 0,
+  cacheRead: 0,
+  cacheWrite: 0
 })
 const isLoadingUsage = ref(false)
-const usageRangeDays = ref<1 | 7 | 30 | 365>(30)
+const usageRangeDays = ref<1 | 7 | 30 | 365>(1)
 
 const usageWindowMs = computed(() => {
   const days = usageRangeDays.value
   return days === 1 ? 24 * 60 * 60 * 1000 : days * 24 * 60 * 60 * 1000
 })
+
+/** Cache hit rate = cache-read tokens ÷ all observable tokens (aligns with desktop). */
+const usageCacheHitRate = computed(() => {
+  const observable = usageTotals.value.noCache + usageTotals.value.cacheRead + usageTotals.value.cacheWrite
+  return observable > 0 ? usageTotals.value.cacheRead / observable : 0
+})
+
+/** Daily average tokens = total ÷ window days (desktop `dailyAverage` card). */
+const usageDailyAverage = computed(() => {
+  const days = usageRangeDays.value
+  return days > 0 ? usageTotals.value.total / days : 0
+})
+
+/** Chinese-style compact number: x.x 亿 / 千万 / 百万 / 万. */
+const formatCompactChinese = (value: number) => {
+  if (!Number.isFinite(value)) return '0'
+  const abs = Math.abs(value)
+  if (abs >= 1e8) {
+    const v = value / 1e8
+    return `${Number.isInteger(v) ? v : v.toFixed(1)}亿`
+  }
+  if (abs >= 1e7) {
+    const v = value / 1e7
+    return `${Number.isInteger(v) ? v : v.toFixed(1)}千万`
+  }
+  if (abs >= 1e6) {
+    const v = value / 1e6
+    return `${Number.isInteger(v) ? v : v.toFixed(1)}百万`
+  }
+  if (abs >= 1e4) {
+    const v = value / 1e4
+    return `${Number.isInteger(v) ? v : v.toFixed(1)}万`
+  }
+  return String(Math.round(value))
+}
+
+/** Percent formatter for cache hit rate (desktop uses percent notation). */
+const formatPercent = (value: number) => {
+  if (!Number.isFinite(value)) return '0%'
+  return `${(value * 100).toFixed(1)}%`
+}
 
 const usageMaxBucketTokens = computed(() =>
   Math.max(1, ...usageBuckets.value.map((b) => b.totalTokens ?? 0))
@@ -829,7 +884,10 @@ const loadUsageRecords = async () => {
         requests: statsRes.totals.requestCount ?? 0,
         input: statsRes.totals.totalInputTokens ?? 0,
         output: statsRes.totals.totalOutputTokens ?? 0,
-        total: statsRes.totals.totalTokens ?? 0
+        total: statsRes.totals.totalTokens ?? 0,
+        noCache: statsRes.totals.totalNoCacheTokens ?? 0,
+        cacheRead: statsRes.totals.totalCacheReadTokens ?? 0,
+        cacheWrite: statsRes.totals.totalCacheWriteTokens ?? 0
       }
     }
     usageBuckets.value = statsRes?.buckets ?? []
@@ -1006,15 +1064,6 @@ onMounted(() => {
         <nav class="settings-nav" aria-label="Settings Categories">
           <button
             class="settings-nav-item"
-            :class="{ 'settings-nav-item-active': currentTab === 'agents' }"
-            type="button"
-            @click="currentTab = 'agents'"
-          >
-            <span class="settings-nav-icon">👤</span>
-            <span>{{ text('agentsManagement') }}</span>
-          </button>
-          <button
-            class="settings-nav-item"
             :class="{ 'settings-nav-item-active': currentTab === 'providers' }"
             type="button"
             @click="currentTab = 'providers'"
@@ -1057,6 +1106,15 @@ onMounted(() => {
           >
             <span class="settings-nav-icon">⚙️</span>
             <span>{{ text('generalPreferences') }}</span>
+          </button>
+          <button
+            class="settings-nav-item"
+            :class="{ 'settings-nav-item-active': currentTab === 'agents' }"
+            type="button"
+            @click="currentTab = 'agents'"
+          >
+            <span class="settings-nav-icon">👤</span>
+            <span>{{ text('agentsManagement') }}</span>
           </button>
         </nav>
 
@@ -1522,13 +1580,33 @@ onMounted(() => {
             </div>
           </div>
 
-          <!-- TAB 3: MCP & Skills -->
+          <!-- TAB 3: MCP & Skills (sub-grouped: MCP / Skills) -->
           <div v-if="currentTab === 'mcp'" class="settings-tab-pane">
             <div class="mcp-skills-layout">
-              <section class="mcp-section">
-                <div class="panel-section-header">
-                  <h4>{{ text('mcpServers') }} ({{ mcpServers.length }})</h4>
-                </div>
+              <div class="mcp-skills-tabs" role="tablist" aria-label="MCP and Skills">
+                <button
+                  class="mcp-skills-tab"
+                  :class="{ 'mcp-skills-tab-active': mcpSkillGroup === 'mcp' }"
+                  type="button"
+                  role="tab"
+                  :aria-selected="mcpSkillGroup === 'mcp'"
+                  @click="mcpSkillGroup = 'mcp'"
+                >
+                  {{ text('mcpServers') }} ({{ mcpServers.length }})
+                </button>
+                <button
+                  class="mcp-skills-tab"
+                  :class="{ 'mcp-skills-tab-active': mcpSkillGroup === 'skills' }"
+                  type="button"
+                  role="tab"
+                  :aria-selected="mcpSkillGroup === 'skills'"
+                  @click="mcpSkillGroup = 'skills'"
+                >
+                  {{ text('installedSkills') }} ({{ skillsList.length }})
+                </button>
+              </div>
+
+              <section v-if="mcpSkillGroup === 'mcp'" class="mcp-section">
                 <div class="mcp-servers-list">
                   <div v-for="srv in mcpServers" :key="srv.id" class="mcp-card">
                     <div class="mcp-card-meta">
@@ -1553,10 +1631,7 @@ onMounted(() => {
                 </div>
               </section>
 
-              <section class="skills-section">
-                <div class="panel-section-header">
-                  <h4>{{ text('installedSkills') }} ({{ skillsList.length }})</h4>
-                </div>
+              <section v-if="mcpSkillGroup === 'skills'" class="skills-section">
                 <div class="skills-list">
                   <div v-for="sk in skillsList" :key="sk.id" class="skill-card">
                     <div class="skill-card-meta">
@@ -1615,19 +1690,19 @@ onMounted(() => {
               <div class="usage-summary-grid">
                 <div class="usage-stat-card">
                   <span class="usage-stat-label">{{ text('totalRequests') }}</span>
-                  <span class="usage-stat-val">{{ usageTotals.requests.toLocaleString() }}</span>
+                  <span class="usage-stat-val">{{ formatCompactChinese(usageTotals.requests) }}</span>
                 </div>
                 <div class="usage-stat-card usage-stat-card-primary">
                   <span class="usage-stat-label">{{ text('totalTokens') }}</span>
-                  <span class="usage-stat-val text-primary">{{ usageTotals.total.toLocaleString() }}</span>
+                  <span class="usage-stat-val text-primary">{{ formatCompactChinese(usageTotals.total) }}</span>
                 </div>
                 <div class="usage-stat-card">
-                  <span class="usage-stat-label">{{ text('inputTokens') }}</span>
-                  <span class="usage-stat-val">{{ usageTotals.input.toLocaleString() }}</span>
+                  <span class="usage-stat-label">{{ text('cacheHitRate') }}</span>
+                  <span class="usage-stat-val">{{ formatPercent(usageCacheHitRate) }}</span>
                 </div>
                 <div class="usage-stat-card">
-                  <span class="usage-stat-label">{{ text('outputTokens') }}</span>
-                  <span class="usage-stat-val">{{ usageTotals.output.toLocaleString() }}</span>
+                  <span class="usage-stat-label">{{ text('dailyAverageTokens') }}</span>
+                  <span class="usage-stat-val">{{ formatCompactChinese(usageDailyAverage) }}</span>
                 </div>
               </div>
 
@@ -1642,7 +1717,7 @@ onMounted(() => {
                   >
                     <div class="usage-bar-meta">
                       <span class="usage-bar-name" :title="b.modelId || ''">{{ b.modelId || 'Unknown Model' }}</span>
-                      <span class="usage-bar-tokens">{{ (b.totalTokens ?? 0).toLocaleString() }} tok</span>
+                      <span class="usage-bar-tokens">{{ formatCompactChinese(b.totalTokens ?? 0) }}</span>
                     </div>
                     <div class="usage-bar-track">
                       <span
@@ -1650,7 +1725,7 @@ onMounted(() => {
                         :style="{ width: `${Math.max(2, Math.round(((b.totalTokens ?? 0) / usageMaxBucketTokens) * 100))}%` }"
                       />
                     </div>
-                    <span class="usage-bar-requests">{{ b.requestCount ?? 0 }} req · in {{ (b.totalInputTokens ?? 0).toLocaleString() }} / out {{ (b.totalOutputTokens ?? 0).toLocaleString() }}</span>
+                    <span class="usage-bar-requests">{{ b.requestCount ?? 0 }} req · in {{ formatCompactChinese(b.totalInputTokens ?? 0) }} / out {{ formatCompactChinese(b.totalOutputTokens ?? 0) }}</span>
                   </div>
                 </div>
               </div>

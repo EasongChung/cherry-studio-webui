@@ -352,6 +352,7 @@ export type WebUiModel = {
   readonly capabilities: readonly string[]
   readonly reasoningOptions?: readonly string[]
   readonly supportsFastMode?: boolean
+  readonly contextWindow?: number
 }
 
 export type WebUiModelGroup = {

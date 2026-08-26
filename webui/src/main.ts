@@ -195,17 +195,6 @@ const App = defineComponent({
     const languageOverride = ref(false)
     const languagePickerOpen = ref(false)
     const settingsModalOpen = ref(false)
-    /** Icon-rail collapse: sidebar shrinks to a single icon column (persisted). */
-    const sidebarCollapsed = ref(window.localStorage.getItem('cherry-webui.sidebar-collapsed') === '1')
-    const toggleSidebarCollapsed = () => {
-      sidebarCollapsed.value = !sidebarCollapsed.value
-      window.localStorage.setItem('cherry-webui.sidebar-collapsed', sidebarCollapsed.value ? '1' : '0')
-      if (sidebarCollapsed.value) {
-        languagePickerOpen.value = false
-        closeConversationMenu()
-        closeQuickPanel()
-      }
-    }
     const authRequired = ref(false)
     const isAuthenticated = ref(true)
     const authKeyDraft = ref('')
@@ -307,6 +296,37 @@ const App = defineComponent({
       if (!event.matches) compactHeaderPickerOpen.value = false
     }
     compactHeaderMql.addEventListener('change', onCompactHeaderChange)
+    /** Desktop drawer: sidebar fully hidden, chat stretches; hover the header button to peek (persisted). */
+    const sidebarDrawerHidden = ref(window.localStorage.getItem('cherry-webui.sidebar-drawer-hidden') === '1')
+    /** Hover-peek overlay of the hidden sidebar (never persisted). */
+    const sidebarDrawerPeekOpen = ref(false)
+    let sidebarDrawerPeekTimer: number | undefined
+    const toggleSidebarDrawer = () => {
+      sidebarDrawerHidden.value = !sidebarDrawerHidden.value
+      sidebarDrawerPeekOpen.value = false
+      window.localStorage.setItem('cherry-webui.sidebar-drawer-hidden', sidebarDrawerHidden.value ? '1' : '0')
+      if (sidebarDrawerHidden.value) {
+        languagePickerOpen.value = false
+        closeConversationMenu()
+        closeQuickPanel()
+      }
+    }
+    const openSidebarDrawerPeek = () => {
+      if (!sidebarDrawerHidden.value) return
+      if (sidebarDrawerPeekTimer) {
+        window.clearTimeout(sidebarDrawerPeekTimer)
+        sidebarDrawerPeekTimer = undefined
+      }
+      sidebarDrawerPeekOpen.value = true
+    }
+    const scheduleSidebarDrawerPeekClose = () => {
+      if (!sidebarDrawerPeekOpen.value) return
+      if (sidebarDrawerPeekTimer) window.clearTimeout(sidebarDrawerPeekTimer)
+      sidebarDrawerPeekTimer = window.setTimeout(() => {
+        sidebarDrawerPeekOpen.value = false
+        sidebarDrawerPeekTimer = undefined
+      }, 220)
+    }
     const skillPickerOpen = ref(false)
     /** Enabled skills for the currently selected agent (Skill launcher). */
     const skills = ref<readonly WebUiSkill[]>([])
@@ -545,8 +565,16 @@ const App = defineComponent({
      */
     const sessionHasMessages = computed(() => (selectedConversation.value ? messages.value.length > 0 : false))
     const contextUsagePercentage = computed(() => {
-      if (!contextUsage.value?.maxTokens) return undefined
-      return Math.min(100, Math.round((contextUsage.value.totalTokens / contextUsage.value.maxTokens) * 100))
+      if (!contextUsage.value) return undefined
+      const modelWindow = selectedModel.value?.contextWindow
+      const denominator = (modelWindow && modelWindow > 0) ? modelWindow : contextUsage.value.maxTokens
+      if (!denominator) return undefined
+      return Math.min(100, Math.round((contextUsage.value.totalTokens / denominator) * 100))
+    })
+    const contextUsageMaxTokens = computed(() => {
+      const modelWindow = selectedModel.value?.contextWindow
+      if (modelWindow && modelWindow > 0) return modelWindow
+      return contextUsage.value?.maxTokens ?? 0
     })
     const contextUsageLabel = computed(() => {
       if (contextUsagePercentage.value === undefined) return text('noContext')
@@ -2222,7 +2250,7 @@ const App = defineComponent({
                 h('div', { class: 'context-usage-meta' }, [
                   h(
                     'span',
-                    `${usage.totalTokens.toLocaleString()} / ${usage.maxTokens.toLocaleString()} (${percentage}%)`
+                    `${usage.totalTokens.toLocaleString()} / ${contextUsageMaxTokens.value.toLocaleString()} (${percentage}%)`
                   ),
                   h('span', { title: stripModelNamePrefix(usage.model) }, stripModelNamePrefix(usage.model))
                 ]),
@@ -3179,6 +3207,7 @@ const App = defineComponent({
       clearStatusPreviewTimers()
       closeConversationMenu()
       statusPreviewOpen.value = false
+      sidebarDrawerPeekOpen.value = false
       const target = conversations.value.find((conversation) => conversation.id === conversationId)
       if (conversationId === selectedConversationId.value) {
         mobileSidebarOpen.value = false
@@ -4216,6 +4245,11 @@ const App = defineComponent({
 
       try {
         await httpClient.postJson(`/api/agent-sessions/${encodeURIComponent(conversationId)}/abort`, {})
+        // The main process tears the session down on abort and does not emit a `done`/`error`
+        // SSE event, so the run id would never be cleared. Reset it here so the stop button
+        // reverts to send immediately after a successful abort.
+        activeRunConversationId.value = undefined
+        pendingSubmittedTurnCount.value = 0
       } catch (error) {
         submitError.value = ''
         bridgeDetail.value = localizedErrorMessage(error)
@@ -5458,6 +5492,7 @@ const App = defineComponent({
               class: [
                 'webui-shell',
                 {
+                  'webui-shell-sidebar-hidden': sidebarDrawerHidden.value,
                   'webui-shell-status-open': statusPanelOpen.value,
                   'webui-shell-files-open': statusPanelOpen.value && rightPanelTab.value === 'files',
                   'webui-shell-resizing': statusPanelResizing.value
@@ -5483,24 +5518,17 @@ const App = defineComponent({
                     'conversation-list',
                     {
                       'conversation-list-open': mobileSidebarOpen.value,
-                      'conversation-list-collapsed': sidebarCollapsed.value
+                      'conversation-list-drawer': sidebarDrawerHidden.value,
+                      'conversation-list-peek-open': sidebarDrawerHidden.value && sidebarDrawerPeekOpen.value
                     }
                   ],
-                  'aria-label': text('newConversation')
+                  'aria-label': text('newConversation'),
+                  onMouseenter: () => {
+                    if (sidebarDrawerHidden.value) openSidebarDrawerPeek()
+                  },
+                  onMouseleave: () => scheduleSidebarDrawerPeekClose()
                 },
                 [
-                  h(
-                    'button',
-                    {
-                      class: ['sidebar-collapse-handle', { 'sidebar-collapse-handle-collapsed': sidebarCollapsed.value }],
-                      type: 'button',
-                      title: sidebarCollapsed.value ? text('expandSidebar') : text('collapseSidebar'),
-                      'aria-label': sidebarCollapsed.value ? text('expandSidebar') : text('collapseSidebar'),
-                      'aria-pressed': sidebarCollapsed.value,
-                      onClick: toggleSidebarCollapsed
-                    },
-                    renderActionIcon(sidebarCollapsed.value ? 'menu' : 'back')
-                  ),
                   h('header', { class: 'panel-header' }, [
                     h('img', { class: 'brand-logo', src: webUiLogoPath, alt: 'Cherry Studio' }),
                     h('div', [h('p', { class: 'eyebrow' }, 'Cherry Studio'), h('h1', text('webui'))]),
@@ -5875,6 +5903,7 @@ const App = defineComponent({
                         'aria-label': text('settings'),
                         onClick: () => {
                           settingsModalOpen.value = true
+                          sidebarDrawerPeekOpen.value = false
                           if (mobileSidebarOpen.value) {
                             mobileSidebarOpen.value = false
                           }
@@ -5892,6 +5921,26 @@ const App = defineComponent({
                 renderCopiedToast(),
                 renderReloadToast(),
                 h('header', { class: 'chat-header' }, [
+                  h(
+                    'button',
+                    {
+                      class: [
+                        'sidebar-drawer-button',
+                        {
+                          'sidebar-drawer-button-active':
+                            sidebarDrawerHidden.value && (sidebarDrawerPeekOpen.value || mobileSidebarOpen.value)
+                        }
+                      ],
+                      type: 'button',
+                      title: text(sidebarDrawerHidden.value ? 'showSidebar' : 'hideSidebar'),
+                      'aria-label': text(sidebarDrawerHidden.value ? 'showSidebar' : 'hideSidebar'),
+                      'aria-expanded': !sidebarDrawerHidden.value,
+                      onClick: () => toggleSidebarDrawer(),
+                      onMouseenter: () => openSidebarDrawerPeek(),
+                      onMouseleave: () => scheduleSidebarDrawerPeekClose()
+                    },
+                    renderActionIcon('menu')
+                  ),
                   h(
                     'button',
                     {

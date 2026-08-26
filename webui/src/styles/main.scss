@@ -89,6 +89,100 @@
     cursor: col-resize;
   }
 
+  /* Drawer mode: sidebar fully hidden, chat + composer stretch left. */
+  .webui-shell-sidebar-hidden {
+    grid-template-columns: 0 minmax(0, 1fr);
+  }
+
+  .webui-shell-status-open.webui-shell-sidebar-hidden {
+    grid-template-columns: 0 minmax(0, 1fr) minmax(300px, var(--webui-right-panel-width, 380px));
+  }
+
+  .webui-shell-files-open.webui-shell-sidebar-hidden {
+    grid-template-columns: 0 minmax(0, 1fr) minmax(320px, var(--webui-right-panel-width, 420px));
+  }
+
+  /* Header drawer toggle — desktop/large-tablet only (hidden ≤640px). */
+  .sidebar-drawer-button {
+    display: inline-grid;
+    place-items: center;
+    width: 36px;
+    height: 36px;
+    padding: 0;
+    color: #475569;
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: background 140ms ease, border-color 140ms ease;
+
+    svg {
+      width: 18px;
+      height: 18px;
+    }
+
+    &:hover,
+    &:focus-visible {
+      color: #0f172a;
+      background: rgb(148 163 184 / 18%);
+      border-color: var(--webui-divider, #e2e8f0);
+      outline: 0;
+    }
+  }
+
+  .sidebar-drawer-button-active {
+    color: #2563eb;
+    background: rgb(37 99 235 / 12%);
+    border-color: rgb(37 99 235 / 30%);
+  }
+
+  :root[data-webui-theme='dark'] .sidebar-drawer-button {
+    color: #94a3b8;
+
+    &:hover,
+    &:focus-visible {
+      color: #f8fafc;
+      background: rgb(148 163 184 / 16%);
+      border-color: #334155;
+    }
+  }
+
+  :root[data-webui-theme='dark'] .sidebar-drawer-button-active {
+    color: #60a5fa;
+    background: rgb(96 165 250 / 16%);
+    border-color: rgb(96 165 250 / 34%);
+  }
+
+  /* Hidden sidebar becomes a floating drawer surfaced on hover. */
+  .conversation-list-drawer {
+    position: absolute;
+    top: 0;
+    left: 0;
+    z-index: 30;
+    width: min(260px, 80vw);
+    height: 100%;
+    height: 100dvh;
+    background: var(--webui-surface, #ffffff);
+    border-right: 1px solid var(--webui-divider, #e2e8f0);
+    box-shadow: 18px 0 42px rgb(15 23 42 / 22%);
+    transform: translateX(-105%);
+    opacity: 0;
+    pointer-events: none;
+    transition: transform 160ms ease-out, opacity 140ms ease-out;
+  }
+
+  .conversation-list-peek-open {
+    transform: translateX(0);
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  :root[data-webui-theme='dark'] .conversation-list-drawer {
+    background: var(--webui-surface, #0f172a);
+    border-color: #1e293b;
+    box-shadow: 18px 0 42px rgb(0 0 0 / 44%);
+  }
+
   .auth-shell {
     display: grid;
     min-height: 100vh;
@@ -138,156 +232,10 @@
   }
 
   .conversation-list {
-    position: relative;
     display: grid;
     grid-template-rows: auto auto auto minmax(0, 1fr);
-    overflow: visible;
+    overflow: hidden;
     border-right: 1px solid #e2e8f0;
-  }
-
-  /* Icon-rail collapse handle — floats over the sidebar's right edge and reveals
-     on hover so the chat border doubles as the affordance. */
-  .sidebar-collapse-handle {
-    position: absolute;
-    top: 50%;
-    right: -13px;
-    z-index: 12;
-    display: grid;
-    place-items: center;
-    width: 26px;
-    height: 44px;
-    color: #64748b;
-    background: #ffffff;
-    border: 1px solid var(--webui-divider, #e5e7eb);
-    border-radius: 8px;
-    box-shadow: 0 2px 8px rgb(15 23 42 / 14%);
-    cursor: pointer;
-    opacity: 0;
-    transform: translateY(-50%);
-    transition: opacity 140ms ease, background 140ms ease;
-
-    svg {
-      width: 14px;
-      height: 14px;
-    }
-
-    &:hover,
-    &:focus-visible {
-      color: #0f172a;
-      background: #f1f5f9;
-      opacity: 1;
-    }
-  }
-
-  .sidebar-collapse-handle-collapsed {
-    /* Keep the expand button visible while collapsed (rail has no other affordance). */
-    right: -30px;
-    opacity: 1;
-
-    &:hover {
-      background: #e2e8f0;
-    }
-  }
-
-  :root[data-webui-theme='dark'] .sidebar-collapse-handle {
-    color: #94a3b8;
-    background: #1e293b;
-    border-color: #334155;
-
-    &:hover,
-    &:focus-visible {
-      color: #f8fafc;
-      background: #334155;
-    }
-  }
-
-  /* Collapsed icon rail: single column, items shrink to icon-sized tiles that
-     clip their leading content (no ellipsis by design). */
-  .conversation-list-collapsed {
-    width: 56px;
-    min-width: 56px;
-    padding-inline: 6px;
-
-    .panel-header,
-    .panel-actions,
-    .mobile-close-button {
-      display: none;
-    }
-
-    .new-chat-button {
-      padding: 0;
-      font-size: 0;
-      aspect-ratio: 1;
-    }
-
-    .conversation-group-header {
-      grid-template-columns: minmax(0, 1fr);
-
-      .conversation-group-new-button,
-      .conversation-folder-icon {
-        display: none;
-      }
-    }
-
-    .conversation-group-toggle {
-      grid-template-columns: minmax(0, 1fr);
-      justify-items: center;
-      padding: 4px 0;
-
-      .conversation-group-name {
-        display: none;
-      }
-    }
-
-    .conversation-item-wrap,
-    .conversation-item {
-      width: 100%;
-      min-width: 0;
-      padding-inline: 4px;
-    }
-
-    .conversation-item {
-      display: block;
-      overflow: hidden;
-      white-space: nowrap;
-
-      /* Leading-content-only tiles: hard clip, no ellipsis. */
-      .conversation-title,
-      .conversation-meta {
-        display: block;
-        max-width: 40px;
-        overflow: hidden;
-        white-space: nowrap;
-      }
-
-      .conversation-meta {
-        visibility: hidden;
-        height: 0;
-        margin: 0;
-      }
-    }
-
-    .conversation-actions,
-    .conversation-group-show-more-button span:last-child {
-      display: none;
-    }
-
-    .conversation-group-show-more-button {
-      justify-content: center;
-    }
-
-    .conversation-list-footer {
-      justify-content: center;
-
-      .sidebar-settings-label {
-        display: none;
-      }
-    }
-
-    .sidebar-settings-button {
-      justify-content: center;
-      padding-inline: 0;
-    }
   }
 
   .conversation-group {
@@ -6279,6 +6227,39 @@
       height: 100dvh;
     }
 
+    /* Drawer toggle is a desktop affordance — touch layouts keep the hamburger. */
+    .sidebar-drawer-button {
+      display: none;
+    }
+
+    /* Neutralize the desktop drawer state on touch layouts (mobile has its own overlay sidebar). */
+    .webui-shell-sidebar-hidden,
+    .webui-shell-status-open.webui-shell-sidebar-hidden,
+    .webui-shell-files-open.webui-shell-sidebar-hidden {
+      grid-template-columns: 1fr;
+    }
+
+    .conversation-list-drawer {
+      /* Touch layouts govern the sidebar via .conversation-list-open (mobile hamburger);
+         reset desktop drawer overrides so it behaves like the standard overlay sidebar. */
+      position: fixed;
+      top: 0;
+      bottom: 0;
+      left: 0;
+      z-index: 30;
+      width: min(320px, calc(100vw - 44px));
+      height: auto;
+      background: var(--webui-surface, #ffffff);
+      box-shadow: 16px 0 36px rgb(15 23 42 / 20%);
+      opacity: 1;
+      pointer-events: auto;
+      transform: translateX(-105%);
+    }
+
+    .conversation-list-drawer.conversation-list-open {
+      transform: translateX(0);
+    }
+
     .mobile-sidebar-backdrop {
       position: fixed;
       z-index: 29;
@@ -6306,11 +6287,6 @@
       overflow: hidden;
       transform: translateX(-105%);
       transition: transform 160ms ease-out;
-    }
-
-    /* Icon-rail collapse is a desktop affordance — no edge handle on touch drawers. */
-    .sidebar-collapse-handle {
-      display: none;
     }
 
     .conversation-list-open {
@@ -6812,8 +6788,8 @@
     position: relative;
     display: flex;
     flex-direction: column;
-    width: min(920px, 94vw);
-    height: min(680px, 88vh);
+    width: min(1040px, 96vw);
+    height: min(760px, 92vh);
     overflow: hidden;
     background: #ffffff;
     border: 1px solid #e2e8f0;
@@ -7398,8 +7374,6 @@
     display: flex;
     flex-direction: column;
     gap: 4px;
-    max-height: 220px;
-    overflow-y: auto;
     border: 1px solid var(--webui-divider, #e5e7eb);
     border-radius: 8px;
     padding: 4px;
@@ -7687,17 +7661,68 @@
 
   /* MCP & Skills Layout */
   .mcp-skills-layout {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
     flex: 1;
     min-height: 0;
+  }
+
+  .mcp-skills-tabs {
+    display: flex;
+    gap: 6px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--webui-divider, #e5e7eb);
+  }
+
+  :root[data-webui-theme='dark'] .mcp-skills-tabs {
+    border-color: #334155;
+  }
+
+  .mcp-skills-tab {
+    padding: 6px 14px;
+    font-size: 13px;
+    font-weight: 500;
+    color: #64748b;
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: all 120ms ease;
+
+    &:hover {
+      color: #0f172a;
+      background: rgb(148 163 184 / 14%);
+    }
+  }
+
+  :root[data-webui-theme='dark'] .mcp-skills-tab {
+    color: #94a3b8;
+
+    &:hover {
+      color: #f8fafc;
+      background: rgb(148 163 184 / 14%);
+    }
+  }
+
+  .mcp-skills-tab-active {
+    color: #2563eb !important;
+    background: #eff6ff !important;
+    border-color: #bfdbfe;
+    font-weight: 600;
+  }
+
+  :root[data-webui-theme='dark'] .mcp-skills-tab-active {
+    color: #93c5fd !important;
+    background: #1e3a8a !important;
+    border-color: #2563eb;
   }
 
   .mcp-section,
   .skills-section {
     display: flex;
     flex-direction: column;
+    flex: 1;
     min-height: 0;
   }
 
@@ -7715,8 +7740,9 @@
   .mcp-card,
   .skill-card {
     display: flex;
-    align-items: center;
+    align-items: flex-start;
     justify-content: space-between;
+    gap: 12px;
     padding: 10px 14px;
     background: #f8fafc;
     border: 1px solid var(--webui-divider, #e5e7eb);
@@ -7742,7 +7768,8 @@
   .skill-card-meta {
     display: flex;
     flex-direction: column;
-    gap: 3px;
+    gap: 4px;
+    flex: 1;
     min-width: 0;
   }
 
@@ -7776,9 +7803,10 @@
   .skill-card-desc {
     font-size: 11.5px;
     color: #64748b;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
+    line-height: 1.45;
+    white-space: normal;
+    word-break: break-word;
+    overflow-wrap: anywhere;
   }
 
   :root[data-webui-theme='dark'] .mcp-card-desc,
