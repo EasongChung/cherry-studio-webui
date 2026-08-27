@@ -1303,7 +1303,20 @@ onBeforeUnmount(() => {
           <!-- TAB 1: Providers & Models -->
           <div v-if="currentTab === 'providers'" class="settings-tab-pane">
             <div class="providers-layout">
-              <aside class="providers-sidebar">
+              <button
+                v-if="isMobileLayout && showProvidersDrawer"
+                class="providers-list-drawer-backdrop"
+                type="button"
+                :aria-label="text('close')"
+                @click="showProvidersDrawer = false"
+              />
+              <aside
+                class="providers-sidebar"
+                :class="{
+                  'providers-list-drawer': isMobileLayout,
+                  'providers-list-drawer-open': isMobileLayout && showProvidersDrawer
+                }"
+              >
                 <div class="providers-search-wrap">
                   <input
                     v-model="providerSearchQuery"
@@ -1318,7 +1331,7 @@ onBeforeUnmount(() => {
                     :key="p.id"
                     class="provider-list-item"
                     :class="{ 'provider-list-item-selected': p.id === selectedProviderId }"
-                    @click="selectProvider(p.id)"
+                    @click="selectProvider(p.id); if (isMobileLayout) showProvidersDrawer = false"
                   >
                     <div class="provider-item-info">
                       <span class="provider-item-name">{{ p.name || p.id }}</span>
@@ -1341,6 +1354,19 @@ onBeforeUnmount(() => {
 
               <section v-if="selectedProvider" class="provider-details-panel">
                 <div class="panel-section-header">
+                  <button
+                    v-if="isMobileLayout"
+                    class="providers-list-fab"
+                    type="button"
+                    :title="text('modelProviders')"
+                    :aria-label="text('modelProviders')"
+                    :aria-expanded="showProvidersDrawer"
+                    @click="showProvidersDrawer = !showProvidersDrawer"
+                  >
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                      <path d="M3 6h18M3 12h18M3 18h18" />
+                    </svg>
+                  </button>
                   <h3>{{ selectedProvider.name || selectedProvider.id }}</h3>
                   <div class="section-actions">
                     <button

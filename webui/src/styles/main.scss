@@ -233,6 +233,87 @@
     box-shadow: 18px 0 42px rgb(0 0 0 / 44%);
   }
 
+  /* Providers list drawer (mobile/tablet) — mirrors settings-nav-drawer:
+  the sidebar slides over the details panel with a backdrop, a FAB in the
+  details header re-opens it after a provider is selected. */
+  .providers-list-drawer {
+    position: fixed;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    z-index: 61;
+    width: min(260px, 80vw);
+    max-height: 100dvh;
+    min-width: 0;
+    background: var(--webui-surface, #ffffff);
+    border-right: 1px solid var(--webui-divider, #e2e8f0);
+    box-shadow: 18px 0 42px rgb(15 23 42 / 22%);
+    transform: translateX(-105%);
+    opacity: 0;
+    pointer-events: none;
+    transition: transform 160ms ease-out, opacity 140ms ease-out;
+  }
+
+  .providers-list-drawer-open {
+    transform: translateX(0);
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  .providers-list-drawer-backdrop {
+    position: fixed;
+    z-index: 60;
+    inset: 0;
+    padding: 0;
+    background: rgb(15 23 42 / 52%);
+    border: 0;
+  }
+
+  .providers-list-fab {
+    display: inline-grid;
+    place-items: center;
+    width: 32px;
+    height: 32px;
+    flex-shrink: 0;
+    padding: 0;
+    color: #475569;
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: background 140ms ease, border-color 140ms ease;
+
+    svg {
+      width: 16px;
+      height: 16px;
+    }
+
+    &:hover,
+    &:focus-visible {
+      color: #0f172a;
+      background: rgb(148 163 184 / 18%);
+      border-color: var(--webui-divider, #e2e8f0);
+      outline: 0;
+    }
+  }
+
+  :root[data-webui-theme='dark'] .providers-list-drawer {
+    background: var(--webui-surface, #0f172a);
+    border-color: #1e293b;
+    box-shadow: 18px 0 42px rgb(0 0 0 / 44%);
+  }
+
+  :root[data-webui-theme='dark'] .providers-list-fab {
+    color: #94a3b8;
+
+    &:hover,
+    &:focus-visible {
+      color: #f8fafc;
+      background: rgb(148 163 184 / 16%);
+      border-color: #334155;
+    }
+  }
+
   .auth-shell {
     display: grid;
     min-height: 100vh;
