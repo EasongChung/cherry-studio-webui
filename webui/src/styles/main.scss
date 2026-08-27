@@ -76,6 +76,12 @@
     overflow: hidden;
   }
 
+  /* Force every grid child to honor its track — without `min-width: 0` a wide
+     sidebar would push the chat column off-screen in drawer mode. */
+  .webui-shell > * {
+    min-width: 0;
+  }
+
   .webui-shell-status-open {
     grid-template-columns: minmax(220px, 260px) minmax(0, 1fr) minmax(300px, var(--webui-right-panel-width, 380px));
   }
@@ -91,15 +97,15 @@
 
   /* Drawer mode: sidebar fully hidden, chat + composer stretch left. */
   .webui-shell-sidebar-hidden {
-    grid-template-columns: 0 minmax(0, 1fr);
+    grid-template-columns: 0px minmax(0, 1fr);
   }
 
   .webui-shell-status-open.webui-shell-sidebar-hidden {
-    grid-template-columns: 0 minmax(0, 1fr) minmax(300px, var(--webui-right-panel-width, 380px));
+    grid-template-columns: 0px minmax(0, 1fr) minmax(300px, var(--webui-right-panel-width, 380px));
   }
 
   .webui-shell-files-open.webui-shell-sidebar-hidden {
-    grid-template-columns: 0 minmax(0, 1fr) minmax(320px, var(--webui-right-panel-width, 420px));
+    grid-template-columns: 0px minmax(0, 1fr) minmax(320px, var(--webui-right-panel-width, 420px));
   }
 
   /* Header drawer toggle — desktop/large-tablet only (hidden ≤640px). */
@@ -153,15 +159,18 @@
     border-color: rgb(96 165 250 / 34%);
   }
 
-  /* Hidden sidebar becomes a floating drawer surfaced on hover. */
+  /* Hidden sidebar becomes a floating drawer surfaced on hover.
+     `position: fixed` decouples it from the grid track so it never blocks
+     the chat column when the parent grid is fully collapsed. */
   .conversation-list-drawer {
-    position: absolute;
+    position: fixed;
     top: 0;
+    bottom: 0;
     left: 0;
     z-index: 30;
     width: min(260px, 80vw);
-    height: 100%;
-    height: 100dvh;
+    max-height: 100dvh;
+    min-width: 0;
     background: var(--webui-surface, #ffffff);
     border-right: 1px solid var(--webui-divider, #e2e8f0);
     box-shadow: 18px 0 42px rgb(15 23 42 / 22%);
@@ -834,6 +843,22 @@
     min-width: 0;
     overflow: hidden;
     padding: 12px 14px 8px;
+  }
+
+  /* Drawer mode guard: when the sidebar grid track collapses, .chat-stage
+     is the only remaining column and must stay visible. */
+  .webui-shell-sidebar-hidden .chat-stage {
+    display: grid;
+    visibility: visible;
+    grid-column: 2;
+    min-width: 0;
+    width: auto;
+    height: 100dvh;
+  }
+
+  .webui-shell-status-open.webui-shell-sidebar-hidden .chat-stage,
+  .webui-shell-files-open.webui-shell-sidebar-hidden .chat-stage {
+    grid-column: 2;
   }
 
   .message-stack {
@@ -6236,7 +6261,7 @@
     .webui-shell-sidebar-hidden,
     .webui-shell-status-open.webui-shell-sidebar-hidden,
     .webui-shell-files-open.webui-shell-sidebar-hidden {
-      grid-template-columns: 1fr;
+      grid-template-columns: 0px minmax(0, 1fr);
     }
 
     .conversation-list-drawer {
