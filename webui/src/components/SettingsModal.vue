@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import type { createWebUiHttpClient } from '../service/httpClient'
 import { fallbackLanguage } from '../utils/constants'
 import { type TextKey, textPacks } from '../utils/textPacks'
@@ -1030,6 +1030,20 @@ const togglePreference = async (key: 'thoughtAutoCollapse' | 'showEstimatedToken
   }
 }
 
+// --- Layout responsive state (mobile breakpoint drives drawer mode for nav + provider list) ---
+const isMobileLayout = ref(false)
+const showNavDrawer = ref(false)
+const showProvidersDrawer = ref(false)
+let mobileMql: MediaQueryList | undefined
+const syncMobileLayout = () => {
+  if (mobileMql) {
+    isMobileLayout.value = mobileMql.matches
+    if (!mobileMql.matches) {
+      showNavDrawer.value = false
+      showProvidersDrawer.value = false
+    }
+  }
+}
 onMounted(() => {
   loadAgents()
   loadProviders()
@@ -1039,6 +1053,17 @@ onMounted(() => {
   loadSkills()
   loadUsageRecords()
   loadPreferences()
+  if (typeof window !== 'undefined' && typeof window.matchMedia === 'function') {
+    mobileMql = window.matchMedia('(max-width: 900px)')
+    isMobileLayout.value = mobileMql.matches
+    mobileMql.addEventListener('change', syncMobileLayout)
+  }
+})
+onBeforeUnmount(() => {
+  if (mobileMql) {
+    mobileMql.removeEventListener('change', syncMobileLayout)
+    mobileMql = undefined
+  }
 })
 </script>
 
@@ -1047,6 +1072,19 @@ onMounted(() => {
     <div class="settings-modal" role="dialog" aria-modal="true">
       <!-- Header -->
       <header class="settings-modal-header">
+        <button
+          v-if="isMobileLayout"
+          class="settings-nav-hamburger"
+          type="button"
+          :title="text('showSidebar')"
+          :aria-label="text('showSidebar')"
+          :aria-expanded="showNavDrawer"
+          @click="showNavDrawer = true"
+        >
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+            <path d="M3 6h18M3 12h18M3 18h18" />
+          </svg>
+        </button>
         <div class="settings-modal-title">
           <svg class="settings-header-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" />
@@ -1061,12 +1099,23 @@ onMounted(() => {
 
       <!-- Body Layout: Sidebar Tabs + Content Area -->
       <div class="settings-modal-body">
-        <nav class="settings-nav" aria-label="Settings Categories">
+        <button
+          v-if="isMobileLayout && showNavDrawer"
+          class="settings-nav-drawer-backdrop"
+          type="button"
+          :aria-label="text('close')"
+          @click="showNavDrawer = false"
+        />
+        <nav
+          class="settings-nav"
+          :class="{ 'settings-nav-drawer': isMobileLayout, 'settings-nav-drawer-open': isMobileLayout && showNavDrawer }"
+          aria-label="Settings Categories"
+        >
           <button
             class="settings-nav-item"
             :class="{ 'settings-nav-item-active': currentTab === 'providers' }"
             type="button"
-            @click="currentTab = 'providers'"
+            @click="currentTab = 'providers'; showNavDrawer = false"
           >
             <span class="settings-nav-icon">🤖</span>
             <span>{{ text('modelProviders') }}</span>
@@ -1075,7 +1124,7 @@ onMounted(() => {
             class="settings-nav-item"
             :class="{ 'settings-nav-item-active': currentTab === 'prompts' }"
             type="button"
-            @click="currentTab = 'prompts'"
+            @click="currentTab = 'prompts'; showNavDrawer = false"
           >
             <span class="settings-nav-icon">📝</span>
             <span>{{ text('promptsLibrary') }}</span>
@@ -1084,7 +1133,7 @@ onMounted(() => {
             class="settings-nav-item"
             :class="{ 'settings-nav-item-active': currentTab === 'mcp' }"
             type="button"
-            @click="currentTab = 'mcp'"
+            @click="currentTab = 'mcp'; showNavDrawer = false"
           >
             <span class="settings-nav-icon">🧩</span>
             <span>{{ text('mcpAndSkills') }}</span>
@@ -1093,7 +1142,7 @@ onMounted(() => {
             class="settings-nav-item"
             :class="{ 'settings-nav-item-active': currentTab === 'usage' }"
             type="button"
-            @click="currentTab = 'usage'"
+            @click="currentTab = 'usage'; showNavDrawer = false"
           >
             <span class="settings-nav-icon">📊</span>
             <span>{{ text('usageStatistics') }}</span>
@@ -1102,7 +1151,7 @@ onMounted(() => {
             class="settings-nav-item"
             :class="{ 'settings-nav-item-active': currentTab === 'preferences' }"
             type="button"
-            @click="currentTab = 'preferences'"
+            @click="currentTab = 'preferences'; showNavDrawer = false"
           >
             <span class="settings-nav-icon">⚙️</span>
             <span>{{ text('generalPreferences') }}</span>
@@ -1111,7 +1160,7 @@ onMounted(() => {
             class="settings-nav-item"
             :class="{ 'settings-nav-item-active': currentTab === 'agents' }"
             type="button"
-            @click="currentTab = 'agents'"
+            @click="currentTab = 'agents'; showNavDrawer = false"
           >
             <span class="settings-nav-icon">👤</span>
             <span>{{ text('agentsManagement') }}</span>

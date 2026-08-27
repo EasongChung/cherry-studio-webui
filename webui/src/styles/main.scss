@@ -186,6 +186,47 @@
     pointer-events: auto;
   }
 
+  /* Settings nav drawer (mobile/tablet) — slides in from the left, mirrors
+     the conversation-list drawer so both floating surfaces share an idiom. */
+  .settings-nav-drawer {
+    position: fixed;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    z-index: 61;
+    width: min(260px, 80vw);
+    max-height: 100dvh;
+    min-width: 0;
+    background: var(--webui-surface, #ffffff);
+    border-right: 1px solid var(--webui-divider, #e2e8f0);
+    box-shadow: 18px 0 42px rgb(15 23 42 / 22%);
+    transform: translateX(-105%);
+    opacity: 0;
+    pointer-events: none;
+    transition: transform 160ms ease-out, opacity 140ms ease-out;
+  }
+
+  .settings-nav-drawer-open {
+    transform: translateX(0);
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  .settings-nav-drawer-backdrop {
+    position: fixed;
+    z-index: 60;
+    inset: 0;
+    padding: 0;
+    background: rgb(15 23 42 / 52%);
+    border: 0;
+  }
+
+  :root[data-webui-theme='dark'] .settings-nav-drawer {
+    background: var(--webui-surface, #0f172a);
+    border-color: #1e293b;
+    box-shadow: 18px 0 42px rgb(0 0 0 / 44%);
+  }
+
   :root[data-webui-theme='dark'] .conversation-list-drawer {
     background: var(--webui-surface, #0f172a);
     border-color: #1e293b;
@@ -8266,40 +8307,38 @@
 
     .settings-modal-body {
       grid-template-columns: 1fr;
-      grid-template-rows: auto 1fr;
+      grid-template-rows: 1fr;
     }
 
+    /* On mobile the nav lives inside its drawer wrapper, not in the modal
+       body grid — strip the inline flex column styling. */
     .settings-nav {
-      flex-direction: row;
+      flex-direction: column;
       border-right: 0;
-      border-bottom: 1px solid var(--webui-divider, #e5e7eb);
-      overflow-x: auto;
-      -webkit-overflow-scrolling: touch;
-
-      /* Hide scrollbar on mobile for a cleaner segmented-control look. */
-      scrollbar-width: none;
-      &::-webkit-scrollbar {
-        display: none;
-      }
+      border-bottom: 0;
+      padding: calc(10px + env(safe-area-inset-top)) 8px calc(10px + env(safe-area-inset-bottom));
+      overflow-y: auto;
     }
 
     .settings-nav-item {
-      flex-shrink: 0;
-      white-space: nowrap;
+      flex-shrink: 1;
+      white-space: normal;
+      width: 100%;
+      text-align: left;
     }
 
     .providers-layout,
     .prompts-layout {
       grid-template-columns: 1fr;
-      grid-template-rows: 140px 1fr;
+      grid-template-rows: 1fr;
     }
 
     .providers-sidebar,
     .prompts-sidebar {
       border-right: 0;
-      border-bottom: 1px solid var(--webui-divider, #e5e7eb);
+      border-bottom: 0;
       padding-right: 0;
-      padding-bottom: 8px;
+      padding-bottom: 0;
     }
 
     .mcp-skills-layout {
