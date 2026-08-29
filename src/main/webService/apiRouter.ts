@@ -24,7 +24,13 @@ import { AGENT_SESSION_SLASH_COMMANDS_CACHE_KEY } from '@shared/ai/agentSessionS
 import type { DataRequest, HttpMethod } from '@shared/data/api/types'
 import { CHERRYAI_DEFAULT_UNIQUE_MODEL_ID } from '@shared/data/presets/cherryai'
 import type { CherryMessagePart } from '@shared/data/types/message'
-import { isUniqueModelId, parseUniqueModelId, type UniqueModelId, UniqueModelIdSchema } from '@shared/data/types/model'
+import {
+  createUniqueModelId,
+  isUniqueModelId,
+  parseUniqueModelId,
+  type UniqueModelId,
+  UniqueModelIdSchema
+} from '@shared/data/types/model'
 import { withCherryMeta } from '@shared/data/types/uiParts'
 import type { Base64String } from '@shared/types/file'
 import { sanitizeConversationTitle } from '@shared/utils/conversationTitle'
@@ -229,6 +235,7 @@ const writableDataApiPatterns = [
   { pattern: /^\/providers\/[^/]+$/, methods: ['PATCH', 'DELETE'] },
   { pattern: /^\/providers\/[^/]+\/api-keys$/, methods: ['POST', 'PUT'] },
   { pattern: /^\/providers\/[^/]+\/api-keys\/[^/]+$/, methods: ['PATCH', 'DELETE'] },
+  { pattern: /^\/providers\/[^/]+\/models:reconcile$/, methods: ['POST'] },
   { pattern: /^\/models$/, methods: ['POST'] },
   { pattern: /^\/models\/[^/]+$/, methods: ['PATCH', 'PUT', 'DELETE'] },
   { pattern: /^\/prompts$/, methods: ['POST'] },
@@ -999,30 +1006,27 @@ export const createWebUiApiRouter = ({
           return { status: 200, body: { models: [] } }
         }
 
-        const modelsDto = rawModels
-          .map((m) => ({
-            providerId,
-            modelId: m.apiModelId ?? (m.id ? m.id.split('::').pop() : '') ?? m.name ?? '',
-            name: m.name ?? m.apiModelId ?? '',
-            group: m.group,
-            capabilities: m.capabilities,
-            endpointTypes: m.endpointTypes,
-            contextWindow: m.contextWindow
-          }))
-          .filter((m) => Boolean(m.modelId))
+        const modelsDto = rawModels.flatMap((m) => {
+          const modelId = m.apiModelId ?? (m.id ? m.id.split('::').pop() : '') ?? m.name ?? ''
+          if (!modelId) return []
 
-        if (modelsDto.length > 0) {
-          const saveResponse = await ApiServer.getInstance().handleRequest({
-            id: randomUUID(),
-            method: 'POST',
-            path: '/models',
-            body: modelsDto,
-            metadata: { timestamp: Date.now() }
-          })
-          if (saveResponse.status >= 200 && saveResponse.status < 300) {
-            sseRelay.broadcast({ event: 'sync', data: { reason: 'settings-updated' } })
+          try {
+            return [
+              {
+                id: createUniqueModelId(providerId, modelId),
+                providerId,
+                modelId,
+                name: m.name ?? modelId,
+                group: m.group,
+                capabilities: m.capabilities,
+                endpointTypes: m.endpointTypes,
+                contextWindow: m.contextWindow
+              }
+            ]
+          } catch {
+            return []
           }
-        }
+        })
 
         return { status: 200, body: { models: modelsDto } }
       } catch (err: unknown) {
@@ -1067,7 +1071,7 @@ export const createWebUiApiRouter = ({
     if (pathname === webUiProviderTestPath) {
       if (method !== 'POST') return methodNotAllowed(['POST'])
       const body = (await readJsonBody(request)) as
-        | { providerId?: string; baseUrl?: string; apiKey?: string; modelId?: string; uniqueModelId?: string }
+        | { providerId?: string; baseUrl?: string; endpointType?: string; apiKey?: string; modelId?: string; uniqueModelId?: string }
         | undefined
       if (!body || typeof body !== 'object') {
         return { status: 400, body: { code: 'WEBUI_INVALID_BODY', message: 'Request body must be JSON' } }
@@ -1097,6 +1101,7 @@ export const createWebUiApiRouter = ({
             endpointConfigs?: Record<string, { baseUrl?: string; url?: string }>
           }
           const chatCfg =
+            (body.endpointType ? p?.endpointConfigs?.[body.endpointType] : undefined) ??
             p?.endpointConfigs?.['openai-chat-completions'] ??
             p?.endpointConfigs?.['anthropic-messages'] ??
             (p?.endpointConfigs ? Object.values(p.endpointConfigs)[0] : undefined)

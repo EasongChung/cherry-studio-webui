@@ -28,6 +28,13 @@ interface ProviderEndpointConfig {
   url?: string
 }
 
+interface ProviderSettings {
+  timeout?: number
+  rateLimit?: number
+  extraHeaders?: Record<string, string>
+  notes?: string
+}
+
 interface ProviderEntity {
   id: string
   name: string
@@ -35,13 +42,19 @@ interface ProviderEntity {
   presetProviderId?: string
   defaultChatEndpoint?: string
   endpointConfigs?: Record<string, ProviderEndpointConfig>
+  providerSettings?: ProviderSettings
 }
 
 interface ModelEntity {
   id: string
   providerId: string
+  modelId?: string
   name: string
   apiModelId?: string
+  group?: string
+  capabilities?: string[]
+  endpointTypes?: string[]
+  contextWindow?: number
   isEnabled?: boolean
 }
 
@@ -317,20 +330,47 @@ const testConnectionState = ref<{
 
 const testingModelId = ref<string>('')
 
+const customEndpointTypes = [
+  'openai-chat-completions',
+  'openai-responses',
+  'anthropic-messages',
+  'google-generate-content',
+  'openai-image-generation',
+  'openai-image-edit'
+] as const
+const customTextEndpointTypes = customEndpointTypes.slice(0, 4)
+const endpointLabels = {
+  'openai-chat-completions': 'endpointOpenAiChat',
+  'openai-responses': 'endpointOpenAiResponses',
+  'anthropic-messages': 'endpointAnthropicMessages',
+  'google-generate-content': 'endpointGoogleGenerate',
+  'openai-image-generation': 'endpointOpenAiImageGeneration',
+  'openai-image-edit': 'endpointOpenAiImageEdit'
+} as const satisfies Record<(typeof customEndpointTypes)[number], TextKey>
+
 const editProviderName = ref('')
-const editBaseUrl = ref('')
 const editApiKey = ref('')
 const isApiKeyDirty = ref(false)
 const editIsEnabled = ref(true)
+const editDefaultChatEndpoint = ref<string>('openai-chat-completions')
+const editEndpointConfigs = ref<Record<string, ProviderEndpointConfig>>({})
+const editProviderTimeout = ref<number | undefined>()
+const editProviderRateLimit = ref<number | undefined>()
+const editProviderHeaders = ref('')
+const editProviderNotes = ref('')
+const isCreatingProvider = ref(false)
+const showCreateProviderForm = ref(false)
 
 const showAddModelForm = ref(false)
 const newModelId = ref('')
 const newModelName = ref('')
 const isAddingModel = ref(false)
 const isPullingModels = ref(false)
-const isRemovingStale = ref(false)
+const isApplyingModelSync = ref(false)
 const showFetchedModelsDialog = ref(false)
-const fetchedModelIds = ref<Set<string>>(new Set())
+const fetchedModels = ref<ModelEntity[]>([])
+const selectedFetchedModelIds = ref<Set<string>>(new Set())
+const selectedStaleModelIds = ref<Set<string>>(new Set())
 
 const filteredProviders = computed(() => {
   const query = providerSearchQuery.value.trim().toLowerCase()
@@ -348,6 +388,9 @@ const currentProviderModels = computed(() => {
   if (!selectedProviderId.value) return []
   return models.value.filter((m) => m.providerId === selectedProviderId.value)
 })
+
+const fetchedModelIdSet = computed(() => new Set(fetchedModels.value.map((model) => model.id)))
+const staleModels = computed(() => currentProviderModels.value.filter((model) => !fetchedModelIdSet.value.has(model.id)))
 
 const loadProviders = async () => {
   isLoadingProviders.value = true
@@ -379,17 +422,21 @@ const selectProvider = (id: string) => {
   selectedProviderId.value = id
   testConnectionState.value = { loading: false }
   showAddModelForm.value = false
+  showCreateProviderForm.value = false
   isApiKeyDirty.value = false
 
   const p = providers.value.find((item) => item.id === id)
   if (p) {
     editProviderName.value = p.name || ''
     editIsEnabled.value = p.isEnabled !== false
-    const chatCfg =
-      p.endpointConfigs?.['openai-chat-completions'] ??
-      p.endpointConfigs?.['anthropic-messages'] ??
-      (p.endpointConfigs ? Object.values(p.endpointConfigs)[0] : undefined)
-    editBaseUrl.value = chatCfg?.baseUrl ?? chatCfg?.url ?? ''
+    editDefaultChatEndpoint.value = p.defaultChatEndpoint || 'openai-chat-completions'
+    editEndpointConfigs.value = { ...(p.endpointConfigs ?? {}) }
+    editProviderTimeout.value = p.providerSettings?.timeout
+    editProviderRateLimit.value = p.providerSettings?.rateLimit
+    editProviderHeaders.value = Object.entries(p.providerSettings?.extraHeaders ?? {})
+      .map(([key, value]) => `${key}: ${value}`)
+      .join('\n')
+    editProviderNotes.value = p.providerSettings?.notes ?? ''
 
     // A key is intentionally never returned to the browser. The main process uses the saved key
     // when testing or fetching models, unless the user explicitly enters a replacement.
@@ -401,24 +448,154 @@ const onApiKeyInput = () => {
   isApiKeyDirty.value = true
 }
 
+const endpointBaseUrl = (endpointType: string) => editEndpointConfigs.value[endpointType]?.baseUrl ?? ''
+
+const availableDefaultChatEndpoints = computed(() =>
+  customTextEndpointTypes.filter((endpointType) => Boolean(endpointBaseUrl(endpointType)))
+)
+
+const updateEndpointBaseUrl = (endpointType: string, value: string) => {
+  const baseUrl = value.trim()
+  const next = { ...editEndpointConfigs.value }
+  if (baseUrl) {
+    next[endpointType] = { ...(next[endpointType] ?? {}), baseUrl }
+  } else {
+    delete next[endpointType]
+  }
+  editEndpointConfigs.value = next
+}
+
+const openCreateProvider = () => {
+  selectedProviderId.value = ''
+  showCreateProviderForm.value = true
+  showAddModelForm.value = false
+  editProviderName.value = ''
+  editApiKey.value = ''
+  isApiKeyDirty.value = false
+  editIsEnabled.value = true
+  editDefaultChatEndpoint.value = 'openai-chat-completions'
+  editEndpointConfigs.value = {}
+  editProviderTimeout.value = undefined
+  editProviderRateLimit.value = undefined
+  editProviderHeaders.value = ''
+  editProviderNotes.value = ''
+}
+
+const createProviderId = (name: string) => {
+  const base = name
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '') || 'custom-provider'
+  let candidate = base
+  let suffix = 2
+  const existingIds = new Set(providers.value.map((provider) => provider.id))
+  while (existingIds.has(candidate)) {
+    candidate = `${base}-${suffix++}`
+  }
+  return candidate
+}
+
+const resolvedDefaultChatEndpoint = () =>
+  availableDefaultChatEndpoints.value.includes(editDefaultChatEndpoint.value as (typeof customTextEndpointTypes)[number])
+    ? editDefaultChatEndpoint.value
+    : (availableDefaultChatEndpoints.value[0] ?? 'openai-chat-completions')
+
+const hasInvalidEndpointUrl = () =>
+  customEndpointTypes.some((endpointType) => {
+    const value = endpointBaseUrl(endpointType)
+    if (!value) return false
+    try {
+      const url = new URL(value)
+      return url.protocol !== 'http:' && url.protocol !== 'https:'
+    } catch {
+      return true
+    }
+  })
+
+const createCustomProvider = async () => {
+  const name = editProviderName.value.trim()
+  const hasTextEndpoint = customTextEndpointTypes.some((endpointType) => Boolean(endpointBaseUrl(endpointType)))
+  if (!name || !hasTextEndpoint) {
+    showToast(text('providerEndpointRequired'))
+    return
+  }
+  if (hasInvalidEndpointUrl()) {
+    showToast(text('providerInvalidEndpointUrl'))
+    return
+  }
+
+  isCreatingProvider.value = true
+  try {
+    const providerId = createProviderId(name)
+    await props.httpClient.postJson('/api/data/providers', {
+      providerId,
+      name,
+      authConfig: { type: 'api-key' },
+      defaultChatEndpoint: resolvedDefaultChatEndpoint(),
+      endpointConfigs: editEndpointConfigs.value,
+      providerSettings: buildProviderSettings()
+    })
+    if (editIsEnabled.value) {
+      await props.httpClient.patchJson(`/api/data/providers/${encodeURIComponent(providerId)}`, { isEnabled: true })
+    }
+
+    if (editApiKey.value.trim()) {
+      await props.httpClient.postJson(`/api/data/providers/${encodeURIComponent(providerId)}/api-keys`, {
+        key: editApiKey.value.trim()
+      })
+    }
+
+    showCreateProviderForm.value = false
+    await loadProviders()
+    selectProvider(providerId)
+    showToast(text('providerCreated'))
+    emit('settingsChanged')
+  } catch (err: unknown) {
+    showToast(err instanceof Error ? err.message : 'Create provider failed')
+  } finally {
+    isCreatingProvider.value = false
+  }
+}
+
+const parseExtraHeaders = (raw: string): Record<string, string> => {
+  const headers: Record<string, string> = {}
+  for (const line of raw.split('\n')) {
+    const trimmedLine = line.trim()
+    if (!trimmedLine) continue
+    const separatorIndex = trimmedLine.indexOf(':')
+    if (separatorIndex > 0) {
+      const key = trimmedLine.slice(0, separatorIndex).trim()
+      const value = trimmedLine.slice(separatorIndex + 1).trim()
+      if (key && value) headers[key] = value
+    }
+  }
+  return headers
+}
+
+const buildProviderSettings = () => ({
+  timeout: editProviderTimeout.value,
+  rateLimit: editProviderRateLimit.value,
+  extraHeaders: parseExtraHeaders(editProviderHeaders.value),
+  ...(editProviderNotes.value.trim() ? { notes: editProviderNotes.value.trim() } : {})
+})
+
 const saveProviderDetails = async () => {
   if (!selectedProvider.value) return
+  if (hasInvalidEndpointUrl()) {
+    showToast(text('providerInvalidEndpointUrl'))
+    return
+  }
   isSavingProvider.value = true
   try {
     const p = selectedProvider.value
-    const chatEndpointKey = p.defaultChatEndpoint || 'openai-chat-completions'
-    const endpointConfigs = {
-      ...(p.endpointConfigs ?? {}),
-      [chatEndpointKey]: {
-        ...(p.endpointConfigs?.[chatEndpointKey] ?? {}),
-        baseUrl: editBaseUrl.value.trim()
-      }
-    }
 
     await props.httpClient.patchJson(`/api/data/providers/${p.id}`, {
       name: editProviderName.value.trim() || p.name,
       isEnabled: editIsEnabled.value,
-      endpointConfigs
+      defaultChatEndpoint: resolvedDefaultChatEndpoint(),
+      endpointConfigs: editEndpointConfigs.value,
+      providerSettings: buildProviderSettings()
     })
 
     if (isApiKeyDirty.value && editApiKey.value.trim()) {
@@ -437,6 +614,23 @@ const saveProviderDetails = async () => {
     emit('settingsChanged')
   } catch (err: unknown) {
     showToast(err instanceof Error ? err.message : 'Save failed')
+  } finally {
+    isSavingProvider.value = false
+  }
+}
+
+const deleteProvider = async () => {
+  if (!selectedProvider.value) return
+  isSavingProvider.value = true
+  try {
+    await props.httpClient.deleteJson(`/api/data/providers/${encodeURIComponent(selectedProvider.value.id)}`)
+    selectedProviderId.value = ''
+    await loadProviders()
+    await loadModels()
+    showToast(text('providerDeleted'))
+    emit('settingsChanged')
+  } catch (err: unknown) {
+    showToast(err instanceof Error ? err.message : 'Delete provider failed')
   } finally {
     isSavingProvider.value = false
   }
@@ -469,7 +663,8 @@ const testConnection = async () => {
       error?: string
     }>('/api/webui/providers/test', {
       providerId: selectedProvider.value.id,
-      baseUrl: editBaseUrl.value.trim() || undefined,
+      baseUrl: endpointBaseUrl(resolvedDefaultChatEndpoint()) || undefined,
+      endpointType: resolvedDefaultChatEndpoint(),
       ...(rawKey ? { apiKey: rawKey } : {})
     })
 
@@ -528,13 +723,11 @@ const pullModels = async () => {
       {}
     )
     const fetched = res?.models ?? []
-    await loadModels()
     if (fetched.length > 0) {
-      // Show the fetched list as an interactive picker (mirrors the desktop sync dialog)
-      // so the user can enable/disable each model instead of a blind bulk insert.
-      fetchedModelIds.value = new Set(fetched.map((m) => m.id))
+      fetchedModels.value = fetched
+      selectedFetchedModelIds.value = new Set(fetched.map((model) => model.id))
+      selectedStaleModelIds.value = new Set(staleModels.value.map((model) => model.id))
       showFetchedModelsDialog.value = true
-      emit('settingsChanged')
     } else {
       showToast(text('noModelsFound'))
     }
@@ -545,36 +738,52 @@ const pullModels = async () => {
   }
 }
 
-const toggleFetchedModel = async (m: ModelEntity, enabled: boolean) => {
-  try {
-    await props.httpClient.patchJson(`/api/data/models/${encodeURIComponent(m.id)}`, { isEnabled: enabled })
-    m.isEnabled = enabled
-    if (!enabled) {
-      fetchedModelIds.value.delete(m.id)
-    }
-  } catch (err: unknown) {
-    showToast(err instanceof Error ? err.message : 'Update model failed')
-  }
+const toggleFetchedModel = (modelId: string, selected: boolean) => {
+  const next = new Set(selectedFetchedModelIds.value)
+  if (selected) next.add(modelId)
+  else next.delete(modelId)
+  selectedFetchedModelIds.value = next
 }
 
-const removeStaleModels = async () => {
-  if (!selectedProvider.value || !fetchedModelIds.value.size) return
-  isRemovingStale.value = true
+const toggleStaleModel = (modelId: string, selected: boolean) => {
+  const next = new Set(selectedStaleModelIds.value)
+  if (selected) next.add(modelId)
+  else next.delete(modelId)
+  selectedStaleModelIds.value = next
+}
+
+const applyModelSync = async () => {
+  if (!selectedProvider.value) return
+  isApplyingModelSync.value = true
   try {
-    const staleIds = currentProviderModels.value
-      .filter((m) => !fetchedModelIds.value.has(m.id))
-      .map((m) => m.id)
-    for (const id of staleIds) {
-      await props.httpClient.deleteJson(`/api/data/models/${encodeURIComponent(id)}`)
-    }
+    const existingIds = new Set(currentProviderModels.value.map((model) => model.id))
+    const toAdd = fetchedModels.value
+      .filter((model) => selectedFetchedModelIds.value.has(model.id) && !existingIds.has(model.id))
+      .map((model) => ({
+        providerId: model.providerId,
+        modelId: model.modelId ?? model.apiModelId ?? model.name,
+        name: model.name,
+        group: model.group,
+        capabilities: model.capabilities,
+        endpointTypes: model.endpointTypes,
+        contextWindow: model.contextWindow
+      }))
+
+    await props.httpClient.postJson(
+      `/api/data/providers/${encodeURIComponent(selectedProvider.value.id)}/models:reconcile`,
+      {
+        toAdd,
+        toRemove: Array.from(selectedStaleModelIds.value)
+      }
+    )
     await loadModels()
     showFetchedModelsDialog.value = false
-    showToast(`${text('modelsRemoved')}: ${staleIds.length}`)
+    showToast(text('modelsSynced'))
     emit('settingsChanged')
   } catch (err: unknown) {
-    showToast(err instanceof Error ? err.message : 'Remove failed')
+    showToast(err instanceof Error ? err.message : 'Sync failed')
   } finally {
-    isRemovingStale.value = false
+    isApplyingModelSync.value = false
   }
 }
 
@@ -584,10 +793,22 @@ const toggleModelEnabled = async (m: ModelEntity) => {
     await props.httpClient.patchJson(`/api/data/models/${encodeURIComponent(m.id)}`, {
       isEnabled: nextVal
     })
-    m.isEnabled = nextVal
+    await loadModels()
     emit('settingsChanged')
   } catch (err: unknown) {
     showToast(err instanceof Error ? err.message : 'Update model failed')
+  }
+}
+
+const deleteModel = async (m: ModelEntity) => {
+  if (!window.confirm(text('deleteModelConfirm'))) return
+  try {
+    await props.httpClient.deleteJson(`/api/data/models/${encodeURIComponent(m.id)}`)
+    await loadModels()
+    showToast(text('modelDeleted'))
+    emit('settingsChanged')
+  } catch (err: unknown) {
+    showToast(err instanceof Error ? err.message : 'Delete model failed')
   }
 }
 
@@ -1324,6 +1545,9 @@ onBeforeUnmount(() => {
                     type="search"
                     :placeholder="text('searchProviders')"
                   />
+                  <button class="settings-btn settings-btn-sm settings-btn-primary" type="button" @click="openCreateProvider">
+                    + {{ text('newProvider') }}
+                  </button>
                 </div>
                 <div class="providers-list">
                   <div
@@ -1352,7 +1576,7 @@ onBeforeUnmount(() => {
                 </div>
               </aside>
 
-              <section v-if="selectedProvider" class="provider-details-panel">
+              <section v-if="selectedProvider && !showCreateProviderForm" class="provider-details-panel">
                 <div class="panel-section-header">
                   <button
                     v-if="isMobileLayout"
@@ -1369,6 +1593,14 @@ onBeforeUnmount(() => {
                   </button>
                   <h3>{{ selectedProvider.name || selectedProvider.id }}</h3>
                   <div class="section-actions">
+                    <button
+                      class="settings-btn settings-btn-sm settings-btn-danger"
+                      type="button"
+                      :disabled="isSavingProvider"
+                      @click="deleteProvider"
+                    >
+                      {{ text('delete') }}
+                    </button>
                     <button
                       class="settings-btn settings-btn-primary"
                       type="button"
@@ -1387,22 +1619,34 @@ onBeforeUnmount(() => {
                       v-model="editProviderName"
                       class="settings-input"
                       type="text"
-                      placeholder="e.g. DeepSeek"
+                      :placeholder="text('providerNamePlaceholder')"
                     />
                   </div>
 
                   <div class="settings-form-row">
-                    <label class="settings-label">{{ text('apiHost') }} / Base URL</label>
-                    <input
-                      v-model="editBaseUrl"
-                      class="settings-input"
-                      type="url"
-                      placeholder="https://api.deepseek.com/v1"
-                    />
+                    <label class="settings-label">{{ text('defaultChatEndpoint') }}</label>
+                    <select v-model="editDefaultChatEndpoint" class="settings-select">
+                      <option v-for="endpointType in customTextEndpointTypes" :key="endpointType" :value="endpointType">
+                        {{ text(endpointLabels[endpointType]) }}
+                      </option>
+                    </select>
+                  </div>
+
+                  <div class="endpoint-config-list">
+                    <div v-for="endpointType in customEndpointTypes" :key="endpointType" class="settings-form-row">
+                      <label class="settings-label">{{ text(endpointLabels[endpointType]) }}</label>
+                      <input
+                        class="settings-input"
+                        type="url"
+                        :value="endpointBaseUrl(endpointType)"
+                        :placeholder="text('endpointUrlPlaceholder')"
+                        @input="updateEndpointBaseUrl(endpointType, ($event.target as HTMLInputElement).value)"
+                      />
+                    </div>
                   </div>
 
                   <div class="settings-form-row">
-                    <label class="settings-label">API Key</label>
+                    <label class="settings-label">{{ text('apiKey') }}</label>
                     <div class="api-key-input-wrap">
                       <input
                         v-model="editApiKey"
@@ -1412,6 +1656,26 @@ onBeforeUnmount(() => {
                         @input="onApiKeyInput"
                       />
                     </div>
+                  </div>
+
+                  <div class="provider-advanced-grid">
+                    <div class="settings-form-row">
+                      <label class="settings-label">{{ text('providerTimeout') }}</label>
+                      <input v-model.number="editProviderTimeout" class="settings-input" type="number" min="1" />
+                    </div>
+                    <div class="settings-form-row">
+                      <label class="settings-label">{{ text('providerRateLimit') }}</label>
+                      <input v-model.number="editProviderRateLimit" class="settings-input" type="number" min="1" />
+                    </div>
+                  </div>
+
+                  <div class="settings-form-row">
+                    <label class="settings-label">{{ text('providerExtraHeaders') }}</label>
+                    <textarea v-model="editProviderHeaders" class="settings-textarea" rows="3" :placeholder="text('providerExtraHeadersHint')" />
+                  </div>
+                  <div class="settings-form-row">
+                    <label class="settings-label">{{ text('providerNotes') }}</label>
+                    <textarea v-model="editProviderNotes" class="settings-textarea" rows="2" />
                   </div>
 
                   <div class="settings-form-row test-connection-row">
@@ -1479,11 +1743,11 @@ onBeforeUnmount(() => {
                     </button>
                   </div>
 
-                  <!-- Fetched models dialog: mirror the desktop sync dialog — enable/disable each
-                       fetched model inline and remove stale (no-longer-offered) models. -->
+                  <!-- Pull-sync preview: select remote models to add and local models to remove,
+                       then apply both sides through the atomic reconcile endpoint. -->
                   <div v-if="showFetchedModelsDialog" class="fetched-models-dialog">
                     <div class="fetched-models-header">
-                      <h5>{{ text('modelsPulled') }}: {{ fetchedModelIds.size }}</h5>
+                      <h5>{{ text('modelsPulled') }}: {{ fetchedModels.length }}</h5>
                       <button
                         class="settings-btn settings-btn-sm settings-btn-secondary"
                         type="button"
@@ -1494,37 +1758,54 @@ onBeforeUnmount(() => {
                     </div>
                     <p class="fetched-models-hint">{{ text('fetchedModelsHint') }}</p>
                     <div class="fetched-models-list">
-                      <div v-for="m in currentProviderModels" :key="m.id" class="model-table-row">
+                      <div v-for="m in fetchedModels" :key="m.id" class="model-table-row">
                         <div class="model-row-info">
-                          <span class="model-row-name">{{ m.name || m.apiModelId || m.id }}</span>
-                          <span class="model-row-id">{{ m.apiModelId || m.id }}</span>
+                          <span class="model-row-name">{{ m.name || m.modelId }}</span>
+                          <span class="model-row-id">{{ m.modelId }}</span>
                         </div>
                         <label class="settings-switch">
                           <input
                             type="checkbox"
-                            :checked="m.isEnabled !== false"
-                            @change="toggleFetchedModel(m, ($event.target as HTMLInputElement).checked)"
+                            :checked="selectedFetchedModelIds.has(m.id)"
+                            @change="toggleFetchedModel(m.id, ($event.target as HTMLInputElement).checked)"
                           />
                           <span class="settings-slider" />
                         </label>
                       </div>
+                      <template v-if="staleModels.length > 0">
+                        <p class="fetched-models-stale-label">{{ text('staleModelsLabel') }} ({{ staleModels.length }})</p>
+                        <div v-for="m in staleModels" :key="m.id" class="model-table-row">
+                          <div class="model-row-info">
+                            <span class="model-row-name">{{ m.name || m.modelId || m.id }}</span>
+                            <span class="model-row-id">{{ m.modelId || m.id }}</span>
+                          </div>
+                          <label class="settings-switch">
+                            <input
+                              type="checkbox"
+                              :checked="selectedStaleModelIds.has(m.id)"
+                              @change="toggleStaleModel(m.id, ($event.target as HTMLInputElement).checked)"
+                            />
+                            <span class="settings-slider" />
+                          </label>
+                        </div>
+                      </template>
                     </div>
                     <footer class="fetched-models-footer">
                       <button
-                        class="settings-btn settings-btn-sm settings-btn-danger"
+                        class="settings-btn settings-btn-sm settings-btn-secondary"
                         type="button"
-                        :disabled="isRemovingStale"
-                        :title="text('removeStaleModels')"
-                        @click="removeStaleModels"
+                        :disabled="isApplyingModelSync"
+                        @click="showFetchedModelsDialog = false"
                       >
-                        🗑 {{ text('removeStaleModels') }}
+                        {{ text('cancel') }}
                       </button>
                       <button
                         class="settings-btn settings-btn-sm settings-btn-primary"
                         type="button"
-                        @click="showFetchedModelsDialog = false"
+                        :disabled="isApplyingModelSync"
+                        @click="applyModelSync"
                       >
-                        ✓ {{ text('confirm') }}
+                        {{ isApplyingModelSync ? text('saving') : text('apply') }}
                       </button>
                     </footer>
                   </div>
@@ -1536,8 +1817,8 @@ onBeforeUnmount(() => {
                       class="model-table-row"
                     >
                       <div class="model-row-info">
-                        <span class="model-row-name">{{ m.name || m.apiModelId || m.id }}</span>
-                        <span class="model-row-id">{{ m.apiModelId || m.id }}</span>
+                        <span class="model-row-name">{{ m.name || m.modelId || m.id }}</span>
+                        <span class="model-row-id">{{ m.modelId || m.id }}</span>
                       </div>
                       <div class="model-row-controls">
                         <button
@@ -1558,6 +1839,14 @@ onBeforeUnmount(() => {
                           />
                           <span class="settings-slider" />
                         </label>
+                        <button
+                          class="settings-btn-icon settings-btn-icon-danger"
+                          type="button"
+                          :title="text('delete')"
+                          @click="deleteModel(m)"
+                        >
+                          🗑
+                        </button>
                       </div>
                     </div>
                     <div v-if="currentProviderModels.length === 0" class="settings-empty-hint">
@@ -1565,6 +1854,57 @@ onBeforeUnmount(() => {
                     </div>
                   </div>
                 </div>
+              </section>
+              <section v-else-if="showCreateProviderForm" class="provider-details-panel">
+                <div class="panel-section-header">
+                  <h3>{{ text('newProvider') }}</h3>
+                  <div class="section-actions">
+                    <button class="settings-btn settings-btn-secondary" type="button" @click="showCreateProviderForm = false">
+                      {{ text('cancel') }}
+                    </button>
+                    <button
+                      class="settings-btn settings-btn-primary"
+                      type="button"
+                      :disabled="isCreatingProvider || !editProviderName.trim()"
+                      @click="createCustomProvider"
+                    >
+                      {{ isCreatingProvider ? text('saving') : text('create') }}
+                    </button>
+                  </div>
+                </div>
+                <div class="settings-form-grid">
+                  <div class="settings-form-row">
+                    <label class="settings-label">{{ text('providerName') }}</label>
+                    <input v-model="editProviderName" class="settings-input" type="text" :placeholder="text('providerNamePlaceholder')" />
+                  </div>
+                  <div class="settings-form-row">
+                    <label class="settings-label">{{ text('defaultChatEndpoint') }}</label>
+                    <select v-model="editDefaultChatEndpoint" class="settings-select">
+                      <option v-for="endpointType in customTextEndpointTypes" :key="endpointType" :value="endpointType">
+                        {{ text(endpointLabels[endpointType]) }}
+                      </option>
+                    </select>
+                  </div>
+                  <div class="endpoint-config-list">
+                    <div v-for="endpointType in customEndpointTypes" :key="endpointType" class="settings-form-row">
+                      <label class="settings-label">{{ text(endpointLabels[endpointType]) }}</label>
+                      <input
+                        class="settings-input"
+                        type="url"
+                        :value="endpointBaseUrl(endpointType)"
+                        :placeholder="text('endpointUrlPlaceholder')"
+                        @input="updateEndpointBaseUrl(endpointType, ($event.target as HTMLInputElement).value)"
+                      />
+                    </div>
+                  </div>
+                  <div class="settings-form-row">
+                    <label class="settings-label">{{ text('apiKey') }}</label>
+                    <input v-model="editApiKey" class="settings-input" type="password" @input="onApiKeyInput" />
+                  </div>
+                </div>
+              </section>
+              <section v-else class="provider-details-panel">
+                <div class="settings-empty-hint-large">{{ text('selectProviderToEdit') }}</div>
               </section>
             </div>
           </div>

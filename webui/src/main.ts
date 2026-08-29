@@ -5498,7 +5498,10 @@ const App = defineComponent({
                   'webui-shell-resizing': statusPanelResizing.value
                 }
               ],
-              style: statusPanelOpen.value ? { '--webui-right-panel-width': `${statusPanelWidth.value}px` } : undefined
+              style: {
+                ...(statusPanelOpen.value ? { '--webui-right-panel-width': `${statusPanelWidth.value}px` } : {}),
+                '--webui-composer-height': `${composerHeight.value + (attachments.value.length ? 116 : 84)}px`
+              }
             },
             [
               mobileSidebarOpen.value

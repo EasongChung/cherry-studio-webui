@@ -69,6 +69,7 @@
   }
 
   .webui-shell {
+    position: relative;
     display: grid;
     grid-template-columns: minmax(220px, 260px) minmax(0, 1fr);
     height: 100vh;
@@ -159,17 +160,16 @@
     border-color: rgb(96 165 250 / 34%);
   }
 
-  /* Hidden sidebar becomes a floating drawer surfaced on hover.
-     `position: fixed` decouples it from the grid track so it never blocks
-     the chat column when the parent grid is fully collapsed. */
+  /* Desktop drawer occupies only the chat message well. The header trigger
+     and composer stay outside it so both remain interactive while it peeks. */
   .conversation-list-drawer {
-    position: fixed;
-    top: 0;
-    bottom: 0;
+    position: absolute;
+    top: 72px;
+    bottom: calc(var(--webui-composer-height, 160px) + 12px);
     left: 0;
     z-index: 30;
     width: min(260px, 80vw);
-    max-height: 100dvh;
+    min-height: 0;
     min-width: 0;
     background: var(--webui-surface, #ffffff);
     border-right: 1px solid var(--webui-divider, #e2e8f0);
@@ -7128,7 +7128,14 @@
   }
 
   .providers-search-wrap {
+    display: flex;
+    gap: 8px;
     margin-bottom: 8px;
+  }
+
+  .providers-search-wrap .settings-search-input {
+    min-width: 0;
+    flex: 1;
   }
 
   .settings-search-input {
@@ -7229,6 +7236,25 @@
     display: flex;
     flex-direction: column;
     gap: 5px;
+  }
+
+  .endpoint-config-list {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+    padding: 10px;
+    border: 1px solid var(--webui-divider, #e5e7eb);
+    border-radius: 8px;
+  }
+
+  .provider-advanced-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+  }
+
+  .settings-btn-icon-danger {
+    color: #b42318;
   }
 
   .settings-label {
@@ -7511,10 +7537,18 @@
     padding: 4px;
   }
 
+  .fetched-models-stale-label {
+    margin: 8px 4px 2px;
+    color: #b45309;
+    font-size: 12px;
+    font-weight: 600;
+  }
+
   .fetched-models-footer {
     display: flex;
     align-items: center;
-    justify-content: space-between;
+    justify-content: flex-end;
+    gap: 8px;
   }
 
   .models-table-wrap {
@@ -8420,6 +8454,11 @@
       border-bottom: 0;
       padding-right: 0;
       padding-bottom: 0;
+    }
+
+    .endpoint-config-list,
+    .provider-advanced-grid {
+      grid-template-columns: 1fr;
     }
 
     .mcp-skills-layout {
