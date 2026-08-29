@@ -94,10 +94,28 @@ interface AiUsageRecordItem {
   modelName?: string | null
   providerId?: string | null
   providerName?: string | null
+  sourceType?: 'assistant' | 'agent' | null
+  sourceId?: string | null
+  sourceName?: string | null
+  sourceIcon?: string | null
+  modality?: 'language' | 'embedding' | 'image' | 'rerank'
   inputTokens?: number | null
   outputTokens?: number | null
   totalTokens?: number | null
-  createdAt?: string | null
+  cost?: number | null
+  costCurrency?: string | null
+  timeFirstTokenMs?: number | null
+  timeCompletionMs?: number | null
+  createdAt: string
+}
+
+type UsageRecordSortBy = 'createdAt' | 'totalTokens' | 'cost' | 'timeFirstTokenMs' | 'tokensPerSecond'
+type UsageRecordSortOrder = 'asc' | 'desc'
+
+interface AiUsageRecordListResponse {
+  items: AiUsageRecordItem[]
+  total: number
+  nextCursor?: string
 }
 
 interface AiUsageStatsBucket {
@@ -1034,7 +1052,12 @@ const usageTotals = ref<{
   cacheWrite: 0
 })
 const isLoadingUsage = ref(false)
+const isLoadingMoreUsage = ref(false)
 const usageRangeDays = ref<1 | 7 | 30 | 365>(1)
+const usageRecordsTotal = ref(0)
+const usageRecordsNextCursor = ref<string | undefined>()
+const usageRecordSortBy = ref<UsageRecordSortBy>('createdAt')
+const usageRecordSortOrder = ref<UsageRecordSortOrder>('desc')
 
 const usageWindowMs = computed(() => {
   const days = usageRangeDays.value
@@ -1086,6 +1109,54 @@ const usageMaxBucketTokens = computed(() =>
   Math.max(1, ...usageBuckets.value.map((b) => b.totalTokens ?? 0))
 )
 
+const usageLocale = computed(() => props.language in textPacks ? props.language : fallbackLanguage)
+const usageNumberFormatter = computed(() => new Intl.NumberFormat(usageLocale.value, { maximumFractionDigits: 0 }))
+const usageDateFormatter = computed(() => new Intl.DateTimeFormat(usageLocale.value, { dateStyle: 'medium' }))
+const usageTimeFormatter = computed(() => new Intl.DateTimeFormat(usageLocale.value, { hour: '2-digit', minute: '2-digit' }))
+
+const usageRecordTotalTokens = (record: AiUsageRecordItem) => {
+  if (record.totalTokens !== null && record.totalTokens !== undefined) return record.totalTokens
+  if (record.inputTokens === null && record.outputTokens === null) return undefined
+  return (record.inputTokens ?? 0) + (record.outputTokens ?? 0)
+}
+
+const usageRecordTps = (record: AiUsageRecordItem) => {
+  if (!record.outputTokens || !record.timeCompletionMs) return undefined
+  const generationMs =
+    record.timeFirstTokenMs !== null && record.timeFirstTokenMs !== undefined && record.timeFirstTokenMs < record.timeCompletionMs
+      ? record.timeCompletionMs - record.timeFirstTokenMs
+      : record.timeCompletionMs
+  return generationMs > 0 ? record.outputTokens / (generationMs / 1000) : undefined
+}
+
+const formatUsageCost = (value: number | null | undefined, currency: string | null | undefined) => {
+  if (value === null || value === undefined) return '–'
+  const symbol = currency?.toUpperCase() === 'CNY' ? '¥' : '$'
+  if (value > 0 && value < 0.0001) return `<${symbol}0.0001`
+  return `${symbol}${value.toFixed(value > 0 && value < 1 ? 4 : 2)}`
+}
+
+const formatUsageDuration = (milliseconds: number | null | undefined) => {
+  if (milliseconds === null || milliseconds === undefined) return '–'
+  if (milliseconds < 1000) return `${usageNumberFormatter.value.format(milliseconds)}ms`
+  if (milliseconds < 60_000) return `${(milliseconds / 1000).toFixed(1)}s`
+  const minutes = Math.floor(milliseconds / 60_000)
+  return `${minutes}m ${((milliseconds % 60_000) / 1000).toFixed(1)}s`
+}
+
+const formatUsageTimestamp = (value: string) => {
+  const date = new Date(value)
+  return `${usageDateFormatter.value.format(date)} ${usageTimeFormatter.value.format(date)}`
+}
+
+const usageSourceLabel = (record: AiUsageRecordItem) => {
+  if (record.sourceId) return record.sourceName || record.sourceId
+  if (record.modality === 'embedding') return text('usageSourceEmbedding')
+  if (record.modality === 'image') return text('usageSourceImage')
+  if (record.modality === 'rerank') return text('usageSourceRerank')
+  return text('usageSourceLanguage')
+}
+
 const loadUsageRecords = async () => {
   isLoadingUsage.value = true
   try {
@@ -1113,21 +1184,54 @@ const loadUsageRecords = async () => {
     }
     usageBuckets.value = statsRes?.buckets ?? []
 
-    // 2. Recent invocation items (same window as the stats query)
+    // 2. Recent invocation items: use the same cursor, sort and total contract as the desktop table.
     const recentQuery = new URLSearchParams({
-      limit: '50',
+      limit: '25',
+      sortBy: usageRecordSortBy.value,
+      sortOrder: usageRecordSortOrder.value,
       from: String(Date.now() - usageWindowMs.value),
       to: String(Date.now())
     })
-    const res = await props.httpClient.getJson<{ items?: AiUsageRecordItem[] } | AiUsageRecordItem[]>(
+    const res = await props.httpClient.getJson<AiUsageRecordListResponse>(
       `/api/data/ai-usage-records?${recentQuery.toString()}`
     )
-    const list = Array.isArray(res) ? res : res?.items ?? []
-    usageRecords.value = list
+    usageRecords.value = res.items ?? []
+    usageRecordsTotal.value = res.total ?? 0
+    usageRecordsNextCursor.value = res.nextCursor
   } catch (err) {
     console.error('Failed to load usage records:', err)
   } finally {
     isLoadingUsage.value = false
+  }
+}
+
+const sortUsageRecords = (nextSortBy: UsageRecordSortBy) => {
+  usageRecordSortOrder.value = usageRecordSortBy.value === nextSortBy && usageRecordSortOrder.value === 'desc' ? 'asc' : 'desc'
+  usageRecordSortBy.value = nextSortBy
+  void loadUsageRecords()
+}
+
+const loadMoreUsageRecords = async () => {
+  if (!usageRecordsNextCursor.value || isLoadingMoreUsage.value) return
+  isLoadingMoreUsage.value = true
+  try {
+    const recentQuery = new URLSearchParams({
+      limit: '25',
+      cursor: usageRecordsNextCursor.value,
+      sortBy: usageRecordSortBy.value,
+      sortOrder: usageRecordSortOrder.value,
+      from: String(Date.now() - usageWindowMs.value),
+      to: String(Date.now())
+    })
+    const res = await props.httpClient.getJson<AiUsageRecordListResponse>(
+      `/api/data/ai-usage-records?${recentQuery.toString()}`
+    )
+    usageRecords.value = [...usageRecords.value, ...(res.items ?? [])]
+    usageRecordsNextCursor.value = res.nextCursor
+  } catch (err) {
+    console.error('Failed to load more usage records:', err)
+  } finally {
+    isLoadingMoreUsage.value = false
   }
 }
 
@@ -2145,30 +2249,75 @@ onBeforeUnmount(() => {
                 </div>
               </div>
 
-              <!-- Recent Calls Table -->
+              <!-- Recent Calls Table: same Data API fields and sort semantics as desktop UsageEntriesTable. -->
               <div class="usage-table-section">
-                <h4>{{ text('recentUsageRecords') }}</h4>
-                <div class="usage-table-wrap">
-                  <div
-                    v-for="rec in usageRecords.slice(0, 30)"
-                    :key="rec.id"
-                    class="usage-table-row"
-                  >
-                    <div class="usage-row-model">
-                      <span class="usage-row-model-name">{{ rec.modelName || rec.modelId || 'Unknown Model' }}</span>
-                      <span class="usage-row-provider">{{ rec.providerName || rec.providerId || '-' }}</span>
-                    </div>
-                    <div class="usage-row-tokens">
-                      <span class="usage-token-badge">{{ (rec.totalTokens ?? 0).toLocaleString() }} tok</span>
-                      <span class="usage-token-detail">
-                        in: {{ (rec.inputTokens ?? 0).toLocaleString() }} / out: {{ (rec.outputTokens ?? 0).toLocaleString() }}
-                      </span>
-                    </div>
-                  </div>
-                  <div v-if="usageRecords.length === 0" class="settings-empty-hint">
-                    {{ text('noUsageRecords') }}
+                <div class="usage-table-heading">
+                  <h4>{{ text('recentUsageRecords') }}</h4>
+                  <span class="usage-record-count">{{ usageRecordsTotal }} {{ text('usageRecords') }}</span>
+                </div>
+                <div class="usage-records-table-wrap">
+                  <table v-if="usageRecords.length > 0" class="usage-records-table">
+                    <thead>
+                      <tr>
+                        <th>{{ text('usageModel') }}</th>
+                        <th>{{ text('usageSource') }}</th>
+                        <th>
+                          <button class="usage-sort-button" type="button" @click="sortUsageRecords('createdAt')">
+                            {{ text('usageDate') }} {{ usageRecordSortBy === 'createdAt' ? (usageRecordSortOrder === 'asc' ? '↑' : '↓') : '↕' }}
+                          </button>
+                        </th>
+                        <th class="usage-number-cell">
+                          <button class="usage-sort-button" type="button" @click="sortUsageRecords('totalTokens')">
+                            {{ text('usageTokens') }} {{ usageRecordSortBy === 'totalTokens' ? (usageRecordSortOrder === 'asc' ? '↑' : '↓') : '↕' }}
+                          </button>
+                        </th>
+                        <th class="usage-number-cell">
+                          <button class="usage-sort-button" type="button" @click="sortUsageRecords('cost')">
+                            {{ text('usageCost') }} {{ usageRecordSortBy === 'cost' ? (usageRecordSortOrder === 'asc' ? '↑' : '↓') : '↕' }}
+                          </button>
+                        </th>
+                        <th class="usage-number-cell">
+                          <button class="usage-sort-button" type="button" @click="sortUsageRecords('timeFirstTokenMs')">
+                            {{ text('usageTtft') }} {{ usageRecordSortBy === 'timeFirstTokenMs' ? (usageRecordSortOrder === 'asc' ? '↑' : '↓') : '↕' }}
+                          </button>
+                        </th>
+                        <th class="usage-number-cell">
+                          <button class="usage-sort-button" type="button" @click="sortUsageRecords('tokensPerSecond')">
+                            {{ text('usageTps') }} {{ usageRecordSortBy === 'tokensPerSecond' ? (usageRecordSortOrder === 'asc' ? '↑' : '↓') : '↕' }}
+                          </button>
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr v-for="rec in usageRecords" :key="rec.id">
+                        <td>
+                          <div class="usage-record-model">
+                            <span class="usage-row-model-name">{{ rec.modelName || rec.modelId || '–' }}</span>
+                            <span class="usage-row-provider">{{ rec.providerName || rec.providerId || '–' }}</span>
+                          </div>
+                        </td>
+                        <td><span class="usage-source-label">{{ usageSourceLabel(rec) }}</span></td>
+                        <td><time :datetime="rec.createdAt">{{ formatUsageTimestamp(rec.createdAt) }}</time></td>
+                        <td class="usage-number-cell">{{ usageRecordTotalTokens(rec) === undefined ? '–' : formatCompactChinese(usageRecordTotalTokens(rec) ?? 0) }}</td>
+                        <td class="usage-number-cell">{{ formatUsageCost(rec.cost, rec.costCurrency) }}</td>
+                        <td class="usage-number-cell">{{ formatUsageDuration(rec.timeFirstTokenMs) }}</td>
+                        <td class="usage-number-cell">{{ usageRecordTps(rec) === undefined ? '–' : `${usageNumberFormatter.format(usageRecordTps(rec) ?? 0)} tok/s` }}</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                  <div v-else class="settings-empty-hint">
+                    {{ isLoadingUsage ? text('loading') : text('noUsageRecords') }}
                   </div>
                 </div>
+                <button
+                  v-if="usageRecordsNextCursor"
+                  class="settings-btn settings-btn-sm settings-btn-secondary usage-load-more"
+                  type="button"
+                  :disabled="isLoadingMoreUsage"
+                  @click="loadMoreUsageRecords"
+                >
+                  {{ isLoadingMoreUsage ? text('loading') : text('usageLoadMore') }}
+                </button>
               </div>
             </div>
           </div>

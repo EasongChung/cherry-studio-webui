@@ -8308,42 +8308,108 @@
     }
   }
 
-  .usage-table-wrap {
+  .usage-table-heading {
     display: flex;
-    flex-direction: column;
-    gap: 6px;
-    max-height: 280px;
-    overflow-y: auto;
-    border: 1px solid var(--webui-divider, #e5e7eb);
-    border-radius: 8px;
-    padding: 6px;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
   }
 
-  :root[data-webui-theme='dark'] .usage-table-wrap {
+  .usage-record-count,
+  .usage-row-provider {
+    color: #64748b;
+    font-size: 11px;
+  }
+
+  .usage-records-table-wrap {
+    max-height: 380px;
+    overflow: auto;
+    border: 1px solid var(--webui-divider, #e5e7eb);
+    border-radius: 8px;
+  }
+
+  .usage-records-table {
+    width: 100%;
+    min-width: 900px;
+    border-collapse: collapse;
+    table-layout: fixed;
+
+    th,
+    td {
+      padding: 10px 12px;
+      overflow: hidden;
+      border-bottom: 1px solid var(--webui-divider, #e5e7eb);
+      font-size: 12px;
+      text-align: left;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    th {
+      position: sticky;
+      top: 0;
+      z-index: 1;
+      color: #64748b;
+      font-weight: 500;
+      background: #f8fafc;
+    }
+
+    tbody tr:hover {
+      background: #f8fafc;
+    }
+
+    th:first-child,
+    td:first-child {
+      width: 24%;
+    }
+
+    th:nth-child(2),
+    td:nth-child(2) {
+      width: 18%;
+    }
+
+    th:nth-child(3),
+    td:nth-child(3) {
+      width: 19%;
+    }
+
+    th:last-child,
+    td:last-child {
+      border-right: 0;
+    }
+  }
+
+  :root[data-webui-theme='dark'] .usage-records-table-wrap {
     border-color: #334155;
   }
 
-  .usage-table-row {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 8px 12px;
-    background: #ffffff;
-    border-radius: 6px;
-    transition: background 120ms ease;
-
-    &:hover {
-      background: #f1f5f9;
-    }
+  :root[data-webui-theme='dark'] .usage-records-table th {
+    color: #94a3b8;
+    background: #182234;
   }
 
-  :root[data-webui-theme='dark'] .usage-table-row {
+  :root[data-webui-theme='dark'] .usage-records-table tbody tr:hover {
     background: #1e293b;
-    &:hover {
-      background: #273449;
-    }
   }
 
+  .usage-sort-button {
+    display: inline-flex;
+    gap: 4px;
+    align-items: center;
+    padding: 0;
+    color: inherit;
+    font: inherit;
+    background: transparent;
+    border: 0;
+    cursor: pointer;
+  }
+
+  .usage-number-cell {
+    text-align: right !important;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .usage-record-model,
   .usage-row-model {
     display: flex;
     flex-direction: column;
@@ -8361,8 +8427,20 @@
     color: #64748b;
   }
 
+  :root[data-webui-theme='dark'] .usage-record-count,
   :root[data-webui-theme='dark'] .usage-row-provider {
     color: #94a3b8;
+  }
+
+  .usage-source-label {
+    display: block;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .usage-load-more {
+    align-self: center;
   }
 
   .usage-row-tokens {
