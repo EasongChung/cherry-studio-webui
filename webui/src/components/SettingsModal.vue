@@ -55,7 +55,6 @@ interface ModelEntity {
   capabilities?: string[]
   endpointTypes?: string[]
   contextWindow?: number
-  isEnabled?: boolean
 }
 
 // --- Prompts Types ---
@@ -357,6 +356,13 @@ const customEndpointTypes = [
   'openai-image-edit'
 ] as const
 const customTextEndpointTypes = customEndpointTypes.slice(0, 4)
+const primaryEndpointTypes = ['openai-chat-completions', 'anthropic-messages'] as const
+const additionalEndpointTypes = [
+  'openai-responses',
+  'google-generate-content',
+  'openai-image-generation',
+  'openai-image-edit'
+] as const
 const endpointLabels = {
   'openai-chat-completions': 'endpointOpenAiChat',
   'openai-responses': 'endpointOpenAiResponses',
@@ -376,6 +382,7 @@ const editProviderTimeout = ref<number | undefined>()
 const editProviderRateLimit = ref<number | undefined>()
 const editProviderHeaders = ref('')
 const editProviderNotes = ref('')
+const providerAdvancedOpen = ref(false)
 const isCreatingProvider = ref(false)
 const showCreateProviderForm = ref(false)
 
@@ -455,6 +462,12 @@ const selectProvider = (id: string) => {
       .map(([key, value]) => `${key}: ${value}`)
       .join('\n')
     editProviderNotes.value = p.providerSettings?.notes ?? ''
+    providerAdvancedOpen.value = Boolean(
+      p.providerSettings?.timeout ||
+        p.providerSettings?.rateLimit ||
+        Object.keys(p.providerSettings?.extraHeaders ?? {}).length ||
+        p.providerSettings?.notes
+    )
 
     // A key is intentionally never returned to the browser. The main process uses the saved key
     // when testing or fetching models, unless the user explicitly enters a replacement.
@@ -497,6 +510,7 @@ const openCreateProvider = () => {
   editProviderRateLimit.value = undefined
   editProviderHeaders.value = ''
   editProviderNotes.value = ''
+  providerAdvancedOpen.value = false
 }
 
 const createProviderId = (name: string) => {
@@ -770,6 +784,14 @@ const toggleStaleModel = (modelId: string, selected: boolean) => {
   selectedStaleModelIds.value = next
 }
 
+const addAllFetchedModels = () => {
+  selectedFetchedModelIds.value = new Set(fetchedModels.value.map((model) => model.id))
+}
+
+const removeAllStaleModels = () => {
+  selectedStaleModelIds.value = new Set(staleModels.value.map((model) => model.id))
+}
+
 const applyModelSync = async () => {
   if (!selectedProvider.value) return
   isApplyingModelSync.value = true
@@ -805,19 +827,6 @@ const applyModelSync = async () => {
   }
 }
 
-const toggleModelEnabled = async (m: ModelEntity) => {
-  const nextVal = m.isEnabled === false
-  try {
-    await props.httpClient.patchJson(`/api/data/models/${encodeURIComponent(m.id)}`, {
-      isEnabled: nextVal
-    })
-    await loadModels()
-    emit('settingsChanged')
-  } catch (err: unknown) {
-    showToast(err instanceof Error ? err.message : 'Update model failed')
-  }
-}
-
 const deleteModel = async (m: ModelEntity) => {
   if (!window.confirm(text('deleteModelConfirm'))) return
   try {
@@ -837,8 +846,7 @@ const addCustomModel = async () => {
     await props.httpClient.postJson('/api/data/models', [{
       providerId: selectedProvider.value.id,
       modelId: newModelId.value.trim(),
-      name: newModelName.value.trim() || newModelId.value.trim(),
-      isEnabled: true
+      name: newModelName.value.trim() || newModelId.value.trim()
     }])
     newModelId.value = ''
     newModelName.value = ''
@@ -1737,7 +1745,7 @@ onBeforeUnmount(() => {
                   </div>
 
                   <div class="endpoint-config-list">
-                    <div v-for="endpointType in customEndpointTypes" :key="endpointType" class="settings-form-row">
+                    <div v-for="endpointType in primaryEndpointTypes" :key="endpointType" class="settings-form-row">
                       <label class="settings-label">{{ text(endpointLabels[endpointType]) }}</label>
                       <input
                         class="settings-input"
@@ -1748,6 +1756,22 @@ onBeforeUnmount(() => {
                       />
                     </div>
                   </div>
+
+                  <details class="provider-more-endpoints-details">
+                    <summary>{{ text('providerMoreEndpoints') }}</summary>
+                    <div class="endpoint-config-list provider-more-endpoints-list">
+                      <div v-for="endpointType in additionalEndpointTypes" :key="endpointType" class="settings-form-row">
+                        <label class="settings-label">{{ text(endpointLabels[endpointType]) }}</label>
+                        <input
+                          class="settings-input"
+                          type="url"
+                          :value="endpointBaseUrl(endpointType)"
+                          :placeholder="text('endpointUrlPlaceholder')"
+                          @input="updateEndpointBaseUrl(endpointType, ($event.target as HTMLInputElement).value)"
+                        />
+                      </div>
+                    </div>
+                  </details>
 
                   <div class="settings-form-row">
                     <label class="settings-label">{{ text('apiKey') }}</label>
@@ -1762,25 +1786,33 @@ onBeforeUnmount(() => {
                     </div>
                   </div>
 
-                  <div class="provider-advanced-grid">
-                    <div class="settings-form-row">
-                      <label class="settings-label">{{ text('providerTimeout') }}</label>
-                      <input v-model.number="editProviderTimeout" class="settings-input" type="number" min="1" />
+                  <details
+                    class="provider-advanced-details"
+                    :open="providerAdvancedOpen"
+                    @toggle="providerAdvancedOpen = ($event.currentTarget as HTMLDetailsElement).open"
+                  >
+                    <summary>{{ text('providerAdvancedSettings') }}</summary>
+                    <div class="provider-advanced-content">
+                      <div class="provider-advanced-grid">
+                        <div class="settings-form-row">
+                          <label class="settings-label">{{ text('providerTimeout') }}</label>
+                          <input v-model.number="editProviderTimeout" class="settings-input" type="number" min="1" />
+                        </div>
+                        <div class="settings-form-row">
+                          <label class="settings-label">{{ text('providerRateLimit') }}</label>
+                          <input v-model.number="editProviderRateLimit" class="settings-input" type="number" min="1" />
+                        </div>
+                      </div>
+                      <div class="settings-form-row">
+                        <label class="settings-label">{{ text('providerExtraHeaders') }}</label>
+                        <textarea v-model="editProviderHeaders" class="settings-textarea" rows="3" :placeholder="text('providerExtraHeadersHint')" />
+                      </div>
+                      <div class="settings-form-row">
+                        <label class="settings-label">{{ text('providerNotes') }}</label>
+                        <textarea v-model="editProviderNotes" class="settings-textarea" rows="2" />
+                      </div>
                     </div>
-                    <div class="settings-form-row">
-                      <label class="settings-label">{{ text('providerRateLimit') }}</label>
-                      <input v-model.number="editProviderRateLimit" class="settings-input" type="number" min="1" />
-                    </div>
-                  </div>
-
-                  <div class="settings-form-row">
-                    <label class="settings-label">{{ text('providerExtraHeaders') }}</label>
-                    <textarea v-model="editProviderHeaders" class="settings-textarea" rows="3" :placeholder="text('providerExtraHeadersHint')" />
-                  </div>
-                  <div class="settings-form-row">
-                    <label class="settings-label">{{ text('providerNotes') }}</label>
-                    <textarea v-model="editProviderNotes" class="settings-textarea" rows="2" />
-                  </div>
+                  </details>
 
                   <div class="settings-form-row test-connection-row">
                     <button
@@ -1851,7 +1883,27 @@ onBeforeUnmount(() => {
                        then apply both sides through the atomic reconcile endpoint. -->
                   <div v-if="showFetchedModelsDialog" class="fetched-models-dialog">
                     <div class="fetched-models-header">
-                      <h5>{{ text('modelsPulled') }}: {{ fetchedModels.length }}</h5>
+                      <div class="fetched-models-title-row">
+                        <h5>{{ text('modelsPulled') }}: {{ fetchedModels.length }}</h5>
+                        <div class="fetched-models-bulk-actions">
+                          <button
+                            class="settings-btn settings-btn-sm settings-btn-secondary"
+                            type="button"
+                            :disabled="fetchedModels.length === 0"
+                            @click="addAllFetchedModels"
+                          >
+                            {{ text('addAllModels') }}
+                          </button>
+                          <button
+                            class="settings-btn settings-btn-sm settings-btn-secondary"
+                            type="button"
+                            :disabled="staleModels.length === 0"
+                            @click="removeAllStaleModels"
+                          >
+                            {{ text('removeAllModels') }}
+                          </button>
+                        </div>
+                      </div>
                       <button
                         class="settings-btn settings-btn-sm settings-btn-secondary"
                         type="button"
@@ -1935,14 +1987,6 @@ onBeforeUnmount(() => {
                           <span v-if="testingModelId === m.id" class="spinner-inline" />
                           <span v-else>⚡</span>
                         </button>
-                        <label class="settings-switch">
-                          <input
-                            type="checkbox"
-                            :checked="m.isEnabled !== false"
-                            @change="toggleModelEnabled(m)"
-                          />
-                          <span class="settings-slider" />
-                        </label>
                         <button
                           class="settings-btn-icon settings-btn-icon-danger"
                           type="button"
@@ -1990,7 +2034,7 @@ onBeforeUnmount(() => {
                     </select>
                   </div>
                   <div class="endpoint-config-list">
-                    <div v-for="endpointType in customEndpointTypes" :key="endpointType" class="settings-form-row">
+                    <div v-for="endpointType in primaryEndpointTypes" :key="endpointType" class="settings-form-row">
                       <label class="settings-label">{{ text(endpointLabels[endpointType]) }}</label>
                       <input
                         class="settings-input"
@@ -2001,6 +2045,21 @@ onBeforeUnmount(() => {
                       />
                     </div>
                   </div>
+                  <details class="provider-more-endpoints-details">
+                    <summary>{{ text('providerMoreEndpoints') }}</summary>
+                    <div class="endpoint-config-list provider-more-endpoints-list">
+                      <div v-for="endpointType in additionalEndpointTypes" :key="endpointType" class="settings-form-row">
+                        <label class="settings-label">{{ text(endpointLabels[endpointType]) }}</label>
+                        <input
+                          class="settings-input"
+                          type="url"
+                          :value="endpointBaseUrl(endpointType)"
+                          :placeholder="text('endpointUrlPlaceholder')"
+                          @input="updateEndpointBaseUrl(endpointType, ($event.target as HTMLInputElement).value)"
+                        />
+                      </div>
+                    </div>
+                  </details>
                   <div class="settings-form-row">
                     <label class="settings-label">{{ text('apiKey') }}</label>
                     <input v-model="editApiKey" class="settings-input" type="password" @input="onApiKeyInput" />
