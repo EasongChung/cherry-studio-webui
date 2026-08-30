@@ -178,14 +178,17 @@ const text = (key: TextKey) => {
 
 // Toast feedback
 const toastMessage = ref('')
+const toastKind = ref<'success' | 'error'>('success')
 let toastTimer: number | undefined
-const showToast = (msg: string) => {
+const showToast = (msg: string, kind: 'success' | 'error' = 'success') => {
   toastMessage.value = msg
+  toastKind.value = kind
   if (toastTimer) window.clearTimeout(toastTimer)
   toastTimer = window.setTimeout(() => {
     toastMessage.value = ''
   }, 2500)
 }
+const showError = (msg: string) => showToast(msg, 'error')
 
 // ==========================================
 // 1. Agents Management
@@ -269,7 +272,7 @@ const saveAgent = async () => {
     showToast(text('agentSaved'))
     emit('settingsChanged')
   } catch (err: unknown) {
-    showToast(err instanceof Error ? err.message : 'Save agent failed')
+    showError(err instanceof Error ? err.message : 'Save agent failed')
   } finally {
     isSavingAgent.value = false
   }
@@ -311,7 +314,7 @@ const createAgent = async () => {
     showToast(text('agentCreated'))
     emit('settingsChanged')
   } catch (err: unknown) {
-    showToast(err instanceof Error ? err.message : 'Create agent failed')
+    showError(err instanceof Error ? err.message : 'Create agent failed')
   } finally {
     isSavingAgent.value = false
   }
@@ -325,7 +328,7 @@ const deleteAgent = async (id: string) => {
     showToast(text('agentDeleted'))
     emit('settingsChanged')
   } catch (err: unknown) {
-    showToast(err instanceof Error ? err.message : 'Delete agent failed')
+    showError(err instanceof Error ? err.message : 'Delete agent failed')
   }
 }
 
@@ -549,11 +552,11 @@ const createCustomProvider = async () => {
   const name = editProviderName.value.trim()
   const hasTextEndpoint = customTextEndpointTypes.some((endpointType) => Boolean(endpointBaseUrl(endpointType)))
   if (!name || !hasTextEndpoint) {
-    showToast(text('providerEndpointRequired'))
+    showError(text('providerEndpointRequired'))
     return
   }
   if (hasInvalidEndpointUrl()) {
-    showToast(text('providerInvalidEndpointUrl'))
+    showError(text('providerInvalidEndpointUrl'))
     return
   }
 
@@ -584,7 +587,7 @@ const createCustomProvider = async () => {
     showToast(text('providerCreated'))
     emit('settingsChanged')
   } catch (err: unknown) {
-    showToast(err instanceof Error ? err.message : 'Create provider failed')
+    showError(err instanceof Error ? err.message : 'Create provider failed')
   } finally {
     isCreatingProvider.value = false
   }
@@ -615,7 +618,7 @@ const buildProviderSettings = () => ({
 const saveProviderDetails = async () => {
   if (!selectedProvider.value) return
   if (hasInvalidEndpointUrl()) {
-    showToast(text('providerInvalidEndpointUrl'))
+    showError(text('providerInvalidEndpointUrl'))
     return
   }
   isSavingProvider.value = true
@@ -645,7 +648,7 @@ const saveProviderDetails = async () => {
     showToast(text('save') + ' ✓')
     emit('settingsChanged')
   } catch (err: unknown) {
-    showToast(err instanceof Error ? err.message : 'Save failed')
+    showError(err instanceof Error ? err.message : 'Save failed')
   } finally {
     isSavingProvider.value = false
   }
@@ -662,7 +665,7 @@ const deleteProvider = async () => {
     showToast(text('providerDeleted'))
     emit('settingsChanged')
   } catch (err: unknown) {
-    showToast(err instanceof Error ? err.message : 'Delete provider failed')
+    showError(err instanceof Error ? err.message : 'Delete provider failed')
   } finally {
     isSavingProvider.value = false
   }
@@ -680,7 +683,7 @@ const toggleProviderEnabled = async (p: ProviderEntity) => {
     }
     emit('settingsChanged')
   } catch (err: unknown) {
-    showToast(err instanceof Error ? err.message : 'Update failed')
+    showError(err instanceof Error ? err.message : 'Update failed')
   }
 }
 
@@ -736,10 +739,10 @@ const testModel = async (m: ModelEntity) => {
     if (res.ok) {
       showToast(`✓ ${m.name || m.id}: ${res.latencyMs ?? 0}ms`)
     } else {
-      showToast(`✗ ${m.name || m.id}: ${res.error || text('connectionFailed')}`)
+      showError(`✗ ${m.name || m.id}: ${res.error || text('connectionFailed')}`)
     }
   } catch (err: unknown) {
-    showToast(`✗ ${m.name || m.id}: ${err instanceof Error ? err.message : text('connectionFailed')}`)
+    showError(`✗ ${m.name || m.id}: ${err instanceof Error ? err.message : text('connectionFailed')}`)
   } finally {
     testingModelId.value = ''
   }
@@ -764,7 +767,7 @@ const pullModels = async () => {
       showToast(text('noModelsFound'))
     }
   } catch (err: unknown) {
-    showToast(err instanceof Error ? err.message : 'Pull failed')
+    showError(err instanceof Error ? err.message : 'Pull failed')
   } finally {
     isPullingModels.value = false
   }
@@ -821,7 +824,7 @@ const applyModelSync = async () => {
     showToast(text('modelsSynced'))
     emit('settingsChanged')
   } catch (err: unknown) {
-    showToast(err instanceof Error ? err.message : 'Sync failed')
+    showError(err instanceof Error ? err.message : 'Sync failed')
   } finally {
     isApplyingModelSync.value = false
   }
@@ -835,7 +838,7 @@ const deleteModel = async (m: ModelEntity) => {
     showToast(text('modelDeleted'))
     emit('settingsChanged')
   } catch (err: unknown) {
-    showToast(err instanceof Error ? err.message : 'Delete model failed')
+    showError(err instanceof Error ? err.message : 'Delete model failed')
   }
 }
 
@@ -855,7 +858,7 @@ const addCustomModel = async () => {
     showToast(text('modelAdded'))
     emit('settingsChanged')
   } catch (err: unknown) {
-    showToast(err instanceof Error ? err.message : 'Add model failed')
+    showError(err instanceof Error ? err.message : 'Add model failed')
   } finally {
     isAddingModel.value = false
   }
@@ -925,7 +928,7 @@ const savePrompt = async () => {
     showToast(text('promptSaved'))
     emit('settingsChanged')
   } catch (err: unknown) {
-    showToast(err instanceof Error ? err.message : 'Save prompt failed')
+    showError(err instanceof Error ? err.message : 'Save prompt failed')
   } finally {
     isSavingPrompt.value = false
   }
@@ -955,7 +958,7 @@ const createPrompt = async () => {
     showToast(text('promptCreated'))
     emit('settingsChanged')
   } catch (err: unknown) {
-    showToast(err instanceof Error ? err.message : 'Create prompt failed')
+    showError(err instanceof Error ? err.message : 'Create prompt failed')
   } finally {
     isSavingPrompt.value = false
   }
@@ -969,7 +972,7 @@ const deletePrompt = async (id: string) => {
     showToast(text('promptDeleted'))
     emit('settingsChanged')
   } catch (err: unknown) {
-    showToast(err instanceof Error ? err.message : 'Delete prompt failed')
+    showError(err instanceof Error ? err.message : 'Delete prompt failed')
   }
 }
 
@@ -1019,7 +1022,7 @@ const toggleMcpServer = async (server: McpServerEntity) => {
     showToast(nextVal ? text('mcpServerEnabled') : text('mcpServerDisabled'))
     emit('settingsChanged')
   } catch (err: unknown) {
-    showToast(err instanceof Error ? err.message : 'Update MCP server failed')
+    showError(err instanceof Error ? err.message : 'Update MCP server failed')
   }
 }
 
@@ -1033,7 +1036,7 @@ const toggleSkill = async (skill: SkillEntity) => {
     showToast(nextVal ? text('skillEnabled') : text('skillDisabled'))
     emit('settingsChanged')
   } catch (err: unknown) {
-    showToast(err instanceof Error ? err.message : 'Update skill failed')
+    showError(err instanceof Error ? err.message : 'Update skill failed')
   }
 }
 
@@ -1322,7 +1325,7 @@ const saveWebSearchPreferences = async () => {
     showToast(text('searchPreferencesSaved'))
     emit('settingsChanged')
   } catch (err: unknown) {
-    showToast(err instanceof Error ? err.message : 'Save search settings failed')
+    showError(err instanceof Error ? err.message : 'Save search settings failed')
   } finally {
     isSavingPreferences.value = false
   }
@@ -1341,7 +1344,7 @@ const saveContextPreferences = async () => {
     showToast(text('save') + ' ✓')
     emit('settingsChanged')
   } catch (err: unknown) {
-    showToast(err instanceof Error ? err.message : 'Save context settings failed')
+    showError(err instanceof Error ? err.message : 'Save context settings failed')
   } finally {
     isSavingPreferences.value = false
   }
@@ -1357,7 +1360,7 @@ const togglePreference = async (key: 'thoughtAutoCollapse' | 'showEstimatedToken
     showToast(text('save') + ' ✓')
     emit('settingsChanged')
   } catch (err: unknown) {
-    showToast(err instanceof Error ? err.message : 'Save preference failed')
+    showError(err instanceof Error ? err.message : 'Save preference failed')
   } finally {
     isSavingPreferences.value = false
   }
@@ -1503,7 +1506,7 @@ onBeforeUnmount(() => {
         <!-- Main Content Area -->
         <main class="settings-content-area">
           <!-- Toast notification -->
-          <div v-if="toastMessage" class="settings-toast">
+          <div v-if="toastMessage" class="settings-toast" :class="{ 'settings-toast-error': toastKind === 'error' }">
             {{ toastMessage }}
           </div>
 
