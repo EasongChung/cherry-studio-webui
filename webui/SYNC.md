@@ -1,42 +1,66 @@
 # WebUI 上游同步指南
 
-本文件记录将 `webui` 分支与 Cherry Studio 上游保持同步的**三步操作法**。
-
-## 背景
-
-`webui` 是一个最小化侵入的独立子目录（Vue 3 + Vite + TypeScript），仅通过主程序窄桥（Data API / WebService）读取数据，不直接触碰主进程、IPC、数据库或 AI 核心。因此上游主程序更新对 webui 影响极小。
+本文件记录 Cherry Studio WebUI fork 的上游同步流程。WebUI 遵循最小侵入原则，但仍通过少量主程序窄桥、频道设置与运行参数接入桌面端；因此冲突必须逐文件审核，不能将主程序文件一律视为可覆盖内容。
 
 ## 三步同步
 
-### 1. 拉取上游最新提交
+### 1. 先将 webui 合入同步分支
 
 ```bash
-git fetch upstream main
+git checkout webui-upstream-sync
+git -c commit.gpgsign=false merge webui
 ```
 
-### 2. 合并上游 main 到当前 webui 分支
+同步分支必须先包含当前 WebUI fork 的全部功能，避免基于过期 fork 合并上游。
+
+### 2. 在同步分支合并上游 main
 
 ```bash
-git merge upstream/main --no-edit -X theirs
+git fetch upstream
+git -c commit.gpgsign=false merge upstream/main
 ```
 
-- `-X theirs`：冲突文件一律采用上游版本。由于 webui 是最小侵入子目录，冲突几乎只发生在主程序代码（i18n locales、electron-builder.yml、主进程 TS 等），本地对这些文件的改动应让位于上游最新实现。
-- 合并成功后应确认 **webui/ 子目录零冲突、零 staged 改动**——这才是正确合并的标志。
-- 若首次未用 `-X theirs` 产生冲突，先 `git merge --abort` 中止，再以 `-X theirs` 重试。
+逐文件解决冲突并验证双方语义。禁止使用 `-X theirs`、`-X ours` 或整文件 checkout 批量覆盖冲突；主程序文件可能包含 WebUI 必需的窄桥和 fork 契约。
 
-### 3. 验证并提交
+冲突审核重点：
+
+- `src/main/webService/`：WebUI HTTP/SSE 窄桥。
+- `src/main/ai/streamManager/api/startAgentSessionRun.ts`：WebUI 运行参数（例如 `fastMode`）。
+- `src/renderer/pages/settings/ChannelsSettings/`：桌面端 WebUI 频道设置入口。
+- `src/renderer/i18n/locales/*.json`：fork 自有的 `settings.webui.*` 翻译键。
+- CI、打包和 `electron-builder.yml`：WebUI 产物注入与发布配置。
+
+### 3. 验证后合回 webui
 
 ```bash
+git checkout webui
+git -c commit.gpgsign=false merge webui-upstream-sync
+```
+
+仅在同步分支全部验证通过后合回 `webui`。未经用户明确授权不推送、不触发云构建。
+
+## 验证门槛
+
+```bash
+pnpm run typecheck:node
+pnpm i18n:check
+pnpm test:renderer src/renderer/pages/settings/ChannelsSettings
 cd webui && pnpm typecheck && pnpm test && pnpm build
-git add -A
-git commit -m "chore(sync): merge upstream/main"
+cd .. && git diff --check
 ```
 
-- 提交信息沿用历史惯例前缀 `chore(sync):`（参见 `7f61ba6740`）。
-- 本方法为**仅本地同步**，不自动推送；需要发布时再 `git push`。
+同时检查 fork 关键契约：
 
-## 注意事项
+```bash
+rg "fastMode" src/main/ai/streamManager/api/startAgentSessionRun.ts src/main/webService/apiRouter.ts
+rg 'settings.webui.title' src/renderer/i18n/locales/*.json
+```
 
-- 不做 `rebase`：保持合并提交历史，便于追溯上游合并点。
-- 主程序 i18n locales 与 webui 的 `textPacks.ts` 相互独立，冲突时直接取上游版本，不影响 webui 文案。
-- 同步后运行 webui 的 `typecheck / test / build` 作为回归门槛。
+## 本次事故记录
+
+2026-08-30 的一次同步直接在 `webui` 分支执行 `merge upstream/main -X theirs`，造成两类回归：
+
+1. 12 个 renderer 语言包中的 `settings.webui.*` 节点被上游版本整体覆盖，频道 WebUI 设置页显示原始翻译 key。
+2. `startAgentSessionRun` 的 `fastMode?: boolean` 类型字段被覆盖，但调用和传参仍保留，导致 Windows 构建出现 TS2339/TS2353。
+
+结论：最小侵入不等于主程序改动可以丢弃。同步必须通过 `webui-upstream-sync` 分支逐文件审核，并同时运行主程序和 WebUI 验证。

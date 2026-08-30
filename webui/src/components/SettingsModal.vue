@@ -4,7 +4,12 @@ import type { createWebUiHttpClient } from '../service/httpClient'
 import { fallbackLanguage } from '../utils/constants'
 import { type TextKey, textPacks } from '../utils/textPacks'
 
-export type SettingsTabId = 'agents' | 'providers' | 'prompts' | 'mcp' | 'usage' | 'preferences'
+export type SettingsTabId = 'agents' | 'providers' | 'prompts' | 'mcp' | 'usage' | 'preferences' | 'help'
+
+interface HelpStatusItem {
+  label: string
+  value: string
+}
 
 // --- Agent Types ---
 interface AgentEntity {
@@ -163,6 +168,11 @@ interface WebUiPreferences {
 const props = defineProps<{
   httpClient: ReturnType<typeof createWebUiHttpClient>
   language: string
+  bridgeState: 'checking' | 'connected' | 'offline'
+  bridgeDetail: string
+  statusItems: readonly HelpStatusItem[]
+  versionItems: readonly HelpStatusItem[]
+  projectRepositoryUrl: string
 }>()
 
 const emit = defineEmits<{
@@ -1070,6 +1080,14 @@ const usageRecordsNextCursor = ref<string | undefined>()
 const usageRecordSortBy = ref<UsageRecordSortBy>('createdAt')
 const usageRecordSortOrder = ref<UsageRecordSortOrder>('desc')
 
+const usageRangeParts = (days: 7 | 30 | 365) => {
+  const label = text(`rangeDays${days}` as TextKey)
+  const compactLabel = label.replace(/\s+/g, '')
+  return compactLabel.startsWith('近')
+    ? { prefix: '近', value: compactLabel.slice(1) }
+    : { prefix: '', value: label }
+}
+
 const usageWindowMs = computed(() => {
   const days = usageRangeDays.value
   return days === 1 ? 24 * 60 * 60 * 1000 : days * 24 * 60 * 60 * 1000
@@ -1500,6 +1518,15 @@ onBeforeUnmount(() => {
           >
             <span class="settings-nav-icon">👤</span>
             <span>{{ text('agentsManagement') }}</span>
+          </button>
+          <button
+            class="settings-nav-item"
+            :class="{ 'settings-nav-item-active': currentTab === 'help' }"
+            type="button"
+            @click="currentTab = 'help'; showNavDrawer = false"
+          >
+            <span class="settings-nav-icon">?</span>
+            <span>{{ text('help') }}</span>
           </button>
         </nav>
 
@@ -2240,7 +2267,7 @@ onBeforeUnmount(() => {
           <div v-if="currentTab === 'usage'" class="settings-tab-pane">
             <div class="usage-panel">
               <div class="panel-section-header">
-                <h3>{{ text('usageStatistics') }}</h3>
+                <h3 class="usage-panel-title">{{ text('usageStatistics') }}</h3>
                 <div class="usage-header-controls">
                   <div class="usage-range-switcher" role="tablist">
                     <button
@@ -2253,7 +2280,11 @@ onBeforeUnmount(() => {
                       :aria-selected="usageRangeDays === d"
                       @click="usageRangeDays = d; loadUsageRecords()"
                     >
-                      {{ d === 1 ? text('rangeToday') : text(`rangeDays${d}` as TextKey) }}
+                      <template v-if="d === 1">{{ text('rangeToday') }}</template>
+                      <template v-else>
+                        <span v-if="usageRangeParts(d).prefix" class="usage-range-prefix">{{ usageRangeParts(d).prefix }}</span>
+                        <span class="usage-range-value">{{ usageRangeParts(d).value }}</span>
+                      </template>
                     </button>
                   </div>
                   <button
@@ -2262,7 +2293,8 @@ onBeforeUnmount(() => {
                     :disabled="isLoadingUsage"
                     @click="loadUsageRecords"
                   >
-                    🔄 {{ isLoadingUsage ? text('loading') : text('refresh') }}
+                    <span class="usage-refresh-icon" aria-hidden="true">↻</span>
+                    <span class="usage-refresh-label">{{ isLoadingUsage ? text('loading') : text('refresh') }}</span>
                   </button>
                 </div>
               </div>
@@ -2569,6 +2601,65 @@ onBeforeUnmount(() => {
                   </div>
                 </div>
               </div>
+            </div>
+          </div>
+
+          <!-- TAB 6: Help -->
+          <div v-if="currentTab === 'help'" class="settings-tab-pane">
+            <div class="settings-help-panel">
+              <details class="help-guide-tree" open>
+                <summary><span class="settings-help-icon" aria-hidden="true">?</span><span>{{ text('helpGuide') }}</span></summary>
+                <ul>
+                  <li>{{ text('helpGuideIntro') }}</li>
+                  <li>{{ text('helpGuideSessions') }}</li>
+                  <li>{{ text('helpGuideStatus') }}</li>
+                  <li>{{ text('helpGuideFiles') }}</li>
+                  <li>{{ text('helpGuidePreview') }}</li>
+                  <li>{{ text('helpGuideSpeech') }}</li>
+                  <li>{{ text('helpGuideSecurity') }}</li>
+                </ul>
+              </details>
+
+              <section class="help-runtime-section">
+                <div class="help-runtime-header">
+                  <h3>{{ text('runtimeDetails') }}</h3>
+                  <span
+                    class="bridge-indicator"
+                    :class="{
+                      'bridge-indicator-connected': bridgeState === 'connected',
+                      'bridge-indicator-offline': bridgeState === 'offline'
+                    }"
+                    :title="bridgeDetail"
+                    :aria-label="bridgeDetail"
+                    role="status"
+                  />
+                </div>
+                <div class="status-runtime-body">
+                  <dl
+                    v-for="(item, index) in statusItems"
+                    :key="item.label"
+                    class="status-row"
+                    :class="{ 'status-row-terminal': index === statusItems.length - 1 }"
+                  >
+                    <dt>{{ item.label }}</dt>
+                    <dd>{{ item.value }}</dd>
+                  </dl>
+                  <div class="version-block">
+                    <dl v-for="item in versionItems" :key="item.label" class="status-row version-row">
+                      <dt>{{ item.label }}</dt>
+                      <dd>{{ item.value }}</dd>
+                    </dl>
+                    <a
+                      class="status-github-link settings-help-repository"
+                      :href="projectRepositoryUrl"
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      {{ text('githubProject') }}
+                    </a>
+                  </div>
+                </div>
+              </section>
             </div>
           </div>
         </main>

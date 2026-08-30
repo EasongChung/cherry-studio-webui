@@ -46,6 +46,7 @@ const ChannelsSettings: FC = () => {
                 />
               )
             })}
+            {/* Fork-owned WebUI channel: keep settings.webui.* in every renderer locale during upstream sync. */}
             {isWebUiSupported && (
               <MenuItem
                 label={t('settings.webui.title')}

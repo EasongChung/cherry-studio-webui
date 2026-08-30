@@ -6958,6 +6958,31 @@
     border-bottom: 1px solid var(--webui-divider, #e5e7eb);
   }
 
+  .settings-nav-hamburger {
+    display: inline-grid;
+    place-items: center;
+    width: 32px;
+    height: 32px;
+    flex-shrink: 0;
+    padding: 0;
+    color: #475569;
+    background: transparent;
+    border: 1px solid var(--webui-divider, #e5e7eb);
+    border-radius: 6px;
+    cursor: pointer;
+  }
+
+  .settings-nav-hamburger svg {
+    display: block;
+    width: 18px;
+    height: 18px;
+  }
+
+  :root[data-webui-theme='dark'] .settings-nav-hamburger {
+    color: #cbd5e1;
+    border-color: #475569;
+  }
+
   .settings-modal-title {
     display: flex;
     align-items: center;
@@ -8160,6 +8185,37 @@
     cursor: pointer;
   }
 
+  .settings-help-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    width: min(760px, 100%);
+    min-height: 0;
+    overflow-y: auto;
+  }
+
+  .settings-help-icon {
+    display: inline-grid;
+    place-items: center;
+    width: 18px;
+    height: 18px;
+    font-weight: 700;
+    border: 1px solid currentColor;
+    border-radius: 50%;
+  }
+
+  .settings-help-repository {
+    width: fit-content;
+    padding: 4px 0;
+    color: #2563eb;
+    font-size: 12px;
+    text-decoration: none;
+  }
+
+  :root[data-webui-theme='dark'] .settings-help-repository {
+    color: #60a5fa;
+  }
+
   /* Usage Statistics Panel */
   .usage-panel {
     display: flex;
@@ -8630,8 +8686,91 @@
       grid-template-columns: 1fr 1fr;
     }
 
+    .panel-section-header {
+      align-items: flex-start;
+      gap: 10px;
+    }
+
+    .panel-section-header > :first-child {
+      min-width: 0;
+    }
+
+    .panel-section-header > .settings-btn,
+    .panel-section-header .section-actions {
+      flex-shrink: 0;
+    }
+
+    .panel-section-header > .settings-btn,
+    .section-actions .settings-btn {
+      white-space: nowrap;
+    }
+
+    .usage-panel > .panel-section-header {
+      display: grid;
+      grid-template-columns: minmax(36px, auto) minmax(0, 1fr);
+      align-items: start;
+    }
+
+    .usage-panel-title {
+      max-width: 2.2em;
+      line-height: 1.35;
+      text-align: center;
+    }
+
     .usage-header-controls {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 42px;
+      align-items: stretch;
+      gap: 8px;
       width: 100%;
-      justify-content: space-between;
+    }
+
+    .usage-range-switcher {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      min-width: 0;
+    }
+
+    .usage-range-option {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-width: 0;
+      padding: 4px 2px;
+      line-height: 1.2;
+    }
+
+    .usage-range-prefix,
+    .usage-range-value {
+      white-space: nowrap;
+    }
+
+    .usage-header-controls > .settings-btn {
+      flex-direction: column;
+      gap: 1px;
+      min-width: 42px;
+      padding: 4px;
+      white-space: nowrap;
+    }
+
+    .usage-refresh-icon {
+      font-size: 16px;
+      line-height: 1;
+    }
+
+    .usage-refresh-label {
+      font-size: 11px;
+      line-height: 1.15;
+    }
+
+    .usage-records-table-wrap {
+      overflow-x: auto;
+      overscroll-behavior-inline: contain;
+      -webkit-overflow-scrolling: touch;
+    }
+
+    .usage-records-table {
+      min-width: 760px;
     }
   }

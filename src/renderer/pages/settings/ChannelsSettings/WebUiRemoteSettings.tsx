@@ -44,6 +44,7 @@ const generateAccessKey = () => {
   return Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('')
 }
 
+// Fork-owned channel settings; upstream sync must preserve this component and all settings.webui.* locale keys.
 const WebUiRemoteSettings: FC = () => {
   const { t } = useTranslation()
   const { theme } = useTheme()

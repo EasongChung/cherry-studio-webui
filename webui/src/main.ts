@@ -118,7 +118,6 @@ import {
   renderActionIcon,
   renderAgentStatusIcon,
   renderComposerToolIcon,
-  renderGithubIcon,
   renderLanguageIcon,
   renderThemeIcon
 } from './utils/icons'
@@ -253,7 +252,7 @@ const App = defineComponent({
     const contextUsage = ref<WebUiContextUsage | null>(null)
     const statusPreviewOpen = ref(false)
     const statusPanelOpen = ref(false)
-    const rightPanelTab = ref<'status' | 'files' | 'speech' | 'help'>('status')
+    const rightPanelTab = ref<'status' | 'files' | 'speech'>('status')
     const statusPanelWidth = ref(Number(window.localStorage.getItem('cherry-webui.right-panel-width')) || 380)
     const statusPanelResizing = ref(false)
     const openConversationMenuId = ref<string>()
@@ -7051,7 +7050,7 @@ const App = defineComponent({
                     'aside',
                     {
                       class: 'status-panel agent-status-panel',
-                      'aria-label': text(rightPanelTab.value === 'help' ? 'help' : 'status')
+                      'aria-label': text('status')
                     },
                     [
                       h('div', {
@@ -7112,23 +7111,6 @@ const App = defineComponent({
                             },
                             [renderActionIcon('volume'), h('span', text('speechPanel'))]
                           ),
-                          h(
-                            'button',
-                            {
-                              class: [
-                                'agent-status-panel-tab',
-                                { 'agent-status-panel-tab-active': rightPanelTab.value === 'help' }
-                              ],
-                              type: 'button',
-                              onClick: () => {
-                                clearStatusPreviewTimers()
-                                statusPreviewOpen.value = false
-                                statusPanelOpen.value = true
-                                rightPanelTab.value = 'help'
-                              }
-                            },
-                            [renderActionIcon('help'), h('span', text('help'))]
-                          )
                         ]),
                         h(
                           'button',
@@ -7148,81 +7130,11 @@ const App = defineComponent({
                         ? renderWorkspaceFilesPanel()
                         : rightPanelTab.value === 'speech'
                           ? h('div', { class: 'agent-status-panel-scroll' }, [renderSpeechPanel()])
-                          : rightPanelTab.value === 'help'
-                            ? h('div', { class: 'agent-status-panel-scroll help-panel' }, [
-                                h('details', { class: 'help-guide-tree', open: true }, [
-                                  h('summary', [renderActionIcon('help'), h('span', text('helpGuide'))]),
-                                  h(
-                                    'ul',
-                                    [
-                                      'helpGuideIntro',
-                                      'helpGuideSessions',
-                                      'helpGuideStatus',
-                                      'helpGuideFiles',
-                                      'helpGuidePreview',
-                                      'helpGuideSpeech',
-                                      'helpGuideSecurity'
-                                    ].map((key) => h('li', text(key as TextKey)))
-                                  )
-                                ]),
-                                h('section', { class: 'help-runtime-section' }, [
-                                  h('div', { class: 'help-runtime-header' }, [
-                                    h('h3', text('runtimeDetails')),
-                                    h('span', {
-                                      class: [
-                                        'bridge-indicator',
-                                        {
-                                          'bridge-indicator-connected': bridgeState.value === 'connected',
-                                          'bridge-indicator-offline': bridgeState.value === 'offline'
-                                        }
-                                      ],
-                                      title: bridgeDetail.value,
-                                      'aria-label': bridgeDetail.value,
-                                      role: 'status'
-                                    })
-                                  ]),
-                                  h('div', { class: 'status-runtime-body' }, [
-                                    ...statusItems.value.map((item, index) =>
-                                      h(
-                                        'dl',
-                                        {
-                                          class: [
-                                            'status-row',
-                                            { 'status-row-terminal': index === statusItems.value.length - 1 }
-                                          ],
-                                          key: item.label
-                                        },
-                                        [h('dt', item.label), h('dd', item.value)]
-                                      )
-                                    ),
-                                    h('div', { class: 'version-block' }, [
-                                      ...versionItems.value.map((item) =>
-                                        h('dl', { class: 'status-row version-row', key: item.label }, [
-                                          h('dt', item.label),
-                                          h('dd', item.value)
-                                        ])
-                                      ),
-                                      h(
-                                        'a',
-                                        {
-                                          class: 'status-github-link',
-                                          href: projectRepositoryUrl,
-                                          target: '_blank',
-                                          rel: 'noreferrer',
-                                          title: text('githubProject'),
-                                          'aria-label': text('githubProject')
-                                        },
-                                        renderGithubIcon()
-                                      )
-                                    ])
-                                  ])
-                                ])
-                              ])
-                            : h(
-                                'div',
-                                { class: 'agent-status-panel-scroll' },
-                                renderAgentStatusBody(agentStatus.value, false)
-                              )
+                          : h(
+                              'div',
+                              { class: 'agent-status-panel-scroll' },
+                              renderAgentStatusBody(agentStatus.value, false)
+                            )
                     ]
                   )
                 : undefined,
@@ -7437,6 +7349,11 @@ const App = defineComponent({
                 ? h(SettingsModal, {
                     httpClient,
                     language: language.value,
+                    bridgeState: bridgeState.value,
+                    bridgeDetail: bridgeDetail.value,
+                    statusItems: statusItems.value,
+                    versionItems: versionItems.value,
+                    projectRepositoryUrl,
                     onClose: () => {
                       settingsModalOpen.value = false
                     },
