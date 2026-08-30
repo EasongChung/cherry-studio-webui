@@ -24,6 +24,7 @@ export async function startAgentSessionRun(input: {
   userParts: CherryMessagePart[]
   listeners: StreamListener[]
   headless?: boolean
+  fastMode?: boolean
   /** Recipients authorized only for this run; [] deliberately disables notify. */
   trustedNotifyChannels?: readonly NotifyChannel[]
   requireIdle?: { expectedAgentId: string }
