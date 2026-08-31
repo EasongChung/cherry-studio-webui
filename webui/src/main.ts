@@ -4232,6 +4232,15 @@ const App = defineComponent({
       void submitMessage({ force: true })
     }
 
+    const editQueuedFollowup = (id: string) => {
+      const item = queuedFollowups.value.find((q) => q.id === id)
+      if (!item) return
+      queuedFollowups.value = queuedFollowups.value.filter((q) => q.id !== id)
+      composerText.value = item.text
+      saveComposerDraft()
+      focusComposerEnd()
+    }
+
     const removeQueuedFollowup = (id: string) => {
       queuedFollowups.value = queuedFollowups.value.filter((q) => q.id !== id)
     }
@@ -4545,6 +4554,16 @@ const App = defineComponent({
                 onClick: () => steerQueuedFollowup(item.id)
               },
               [h('span', { class: 'queued-followup-label' }, '引导')]
+            ),
+            h(
+              'button',
+              {
+                class: 'queued-followup-edit',
+                type: 'button',
+                title: text('edit'),
+                onClick: () => editQueuedFollowup(item.id)
+              },
+              [h('span', { class: 'queued-followup-label' }, text('edit'))]
             ),
             h(
               'button',

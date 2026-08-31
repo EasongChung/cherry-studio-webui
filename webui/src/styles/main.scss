@@ -270,23 +270,21 @@
   }
 
   .providers-list-fab {
-    display: inline-grid;
-    place-items: center;
-    width: 32px;
-    height: 32px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
     flex-shrink: 0;
-    padding: 0;
+    height: 32px;
+    padding: 0 12px;
     color: #475569;
+    font-size: 13px;
+    font-weight: 500;
+    white-space: nowrap;
     background: transparent;
     border: 1px solid transparent;
     border-radius: 8px;
     cursor: pointer;
     transition: background 140ms ease, border-color 140ms ease;
-
-    svg {
-      width: 16px;
-      height: 16px;
-    }
 
     &:hover,
     &:focus-visible {
@@ -313,6 +311,82 @@
       border-color: #334155;
     }
   }
+    .agents-list-drawer {
+      position: fixed;
+      top: 0;
+      bottom: 0;
+      left: 0;
+      z-index: 61;
+      width: min(260px, 80vw);
+      max-height: 100dvh;
+      min-width: 0;
+      background: var(--webui-surface, #ffffff);
+      border-right: 1px solid var(--webui-divider, #e2e8f0);
+      box-shadow: 18px 0 42px rgb(15 23 42 / 22%);
+      transform: translateX(-105%);
+      opacity: 0;
+      pointer-events: none;
+      transition: transform 160ms ease-out, opacity 140ms ease-out;
+    }
+
+    .agents-list-drawer-open {
+      transform: translateX(0);
+      opacity: 1;
+      pointer-events: auto;
+    }
+
+    .agents-list-drawer-backdrop {
+      position: fixed;
+      z-index: 60;
+      inset: 0;
+      padding: 0;
+      background: rgb(15 23 42 / 52%);
+      border: 0;
+    }
+
+    .agents-list-fab {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+      height: 32px;
+      padding: 0 12px;
+      color: #475569;
+      font-size: 13px;
+      font-weight: 500;
+      white-space: nowrap;
+      background: transparent;
+      border: 1px solid transparent;
+      border-radius: 8px;
+      cursor: pointer;
+      transition: background 140ms ease, border-color 140ms ease;
+
+      &:hover,
+      &:focus-visible {
+        color: #0f172a;
+        background: rgb(148 163 184 / 18%);
+        border-color: var(--webui-divider, #e2e8f0);
+        outline: 0;
+      }
+    }
+
+    :root[data-webui-theme='dark'] .agents-list-drawer {
+      background: var(--webui-surface, #0f172a);
+      border-color: #1e293b;
+      box-shadow: 18px 0 42px rgb(0 0 0 / 44%);
+    }
+
+    :root[data-webui-theme='dark'] .agents-list-fab {
+      color: #94a3b8;
+
+      &:hover,
+      &:focus-visible {
+        color: #f8fafc;
+        background: rgb(148 163 184 / 16%);
+        border-color: #334155;
+      }
+    }
+
 
   .auth-shell {
     display: grid;
@@ -2312,9 +2386,9 @@
 
   .help-runtime-header {
     display: flex;
-    gap: 12px;
+    gap: 8px;
     align-items: center;
-    justify-content: space-between;
+    justify-content: flex-start;
     margin-bottom: 2px;
   }
 
@@ -4605,7 +4679,8 @@
   }
 
   .queued-followup-steer,
-  .queued-followup-cancel {
+  .queued-followup-cancel,
+  .queued-followup-edit {
     display: inline-flex;
     align-items: center;
     gap: 3px;
@@ -4641,6 +4716,25 @@
   .queued-followup-cancel:hover {
     background: #b91c1c;
   }
+
+  .queued-followup-edit {
+    color: #334155;
+    background: #e2e8f0;
+  }
+
+  .queued-followup-edit:hover {
+    background: #cbd5e1;
+  }
+
+  :root[data-webui-theme='dark'] .queued-followup-edit {
+    color: #cbd5e1;
+    background: #334155;
+  }
+
+  :root[data-webui-theme='dark'] .queued-followup-edit:hover {
+    background: #475569;
+  }
+
 
   :root[data-webui-theme='dark'] .queued-followup-dock {
     background: #1e293b;
@@ -7093,6 +7187,11 @@
 
   .settings-nav-icon {
     font-size: 15px;
+    display: inline-block;
+    width: 20px;
+    text-align: center;
+    flex-shrink: 0;
+    line-height: 1;
   }
 
   .settings-content-area {
@@ -8205,11 +8304,21 @@
   }
 
   .settings-help-repository {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
     width: fit-content;
     padding: 4px 0;
     color: #2563eb;
     font-size: 12px;
     text-decoration: none;
+  }
+
+  .settings-help-repository .status-github-icon {
+    width: 16px;
+    height: 16px;
+    flex-shrink: 0;
+    display: block;
   }
 
   :root[data-webui-theme='dark'] .settings-help-repository {
@@ -8772,5 +8881,27 @@
 
     .usage-records-table {
       min-width: 760px;
+
+      // Widen the time column on small screens so the full timestamp is visible;
+      // let it wrap instead of being ellipsized/cut off.
+      th:first-child,
+      td:first-child {
+        width: 18%;
+      }
+
+      th:nth-child(2),
+      td:nth-child(2) {
+        width: 12%;
+      }
+
+      th:nth-child(3),
+      td:nth-child(3) {
+        width: 26%;
+      }
+
+      td:nth-child(3) {
+        white-space: normal;
+        word-break: break-word;
+      }
     }
   }

@@ -1388,6 +1388,7 @@ const togglePreference = async (key: 'thoughtAutoCollapse' | 'showEstimatedToken
 const isMobileLayout = ref(false)
 const showNavDrawer = ref(false)
 const showProvidersDrawer = ref(false)
+const showAgentsDrawer = ref(false)
 let mobileMql: MediaQueryList | undefined
 const syncMobileLayout = () => {
   if (mobileMql) {
@@ -1395,6 +1396,7 @@ const syncMobileLayout = () => {
     if (!mobileMql.matches) {
       showNavDrawer.value = false
       showProvidersDrawer.value = false
+      showAgentsDrawer.value = false
     }
   }
 }
@@ -1540,7 +1542,20 @@ onBeforeUnmount(() => {
           <!-- TAB 0: Agents Management -->
           <div v-if="currentTab === 'agents'" class="settings-tab-pane">
             <div class="prompts-layout">
-              <aside class="prompts-sidebar">
+              <button
+                v-if="isMobileLayout && showAgentsDrawer"
+                class="agents-list-drawer-backdrop"
+                type="button"
+                :aria-label="text('close')"
+                @click="showAgentsDrawer = false"
+              />
+              <aside
+                class="prompts-sidebar"
+                :class="{
+                  'agents-list-drawer': isMobileLayout,
+                  'agents-list-drawer-open': isMobileLayout && showAgentsDrawer
+                }"
+              >
                 <div class="prompts-search-wrap">
                   <input
                     v-model="agentSearchQuery"
@@ -1558,7 +1573,7 @@ onBeforeUnmount(() => {
                     :key="ag.id"
                     class="prompt-list-item"
                     :class="{ 'prompt-list-item-selected': ag.id === selectedAgentId && !showNewAgentDrawer }"
-                    @click="selectAgent(ag.id)"
+                    @click="selectAgent(ag.id); if (isMobileLayout) showAgentsDrawer = false"
                   >
                     <div class="prompt-item-info">
                       <span class="prompt-item-title">{{ ag.name }}</span>
@@ -1574,6 +1589,17 @@ onBeforeUnmount(() => {
               <section class="prompt-details-panel">
                 <div v-if="showNewAgentDrawer || selectedAgent" class="prompt-form-wrap">
                   <div class="panel-section-header">
+                    <button
+                      v-if="isMobileLayout"
+                      class="agents-list-fab"
+                      type="button"
+                      :title="text('agentsManagement')"
+                      :aria-label="text('agentsManagement')"
+                      :aria-expanded="showAgentsDrawer"
+                      @click="showAgentsDrawer = !showAgentsDrawer"
+                    >
+                      {{ text('agents') }}
+                    </button>
                     <h3>{{ showNewAgentDrawer ? text('newAgent') : text('editAgent') }}</h3>
                     <div class="section-actions">
                       <button
@@ -1729,9 +1755,7 @@ onBeforeUnmount(() => {
                     :aria-expanded="showProvidersDrawer"
                     @click="showProvidersDrawer = !showProvidersDrawer"
                   >
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
-                      <path d="M3 6h18M3 12h18M3 18h18" />
-                    </svg>
+                    {{ text('providers') }}
                   </button>
                   <h3>{{ selectedProvider.name || selectedProvider.id }}</h3>
                   <div class="section-actions">
@@ -2622,7 +2646,6 @@ onBeforeUnmount(() => {
 
               <section class="help-runtime-section">
                 <div class="help-runtime-header">
-                  <h3>{{ text('runtimeDetails') }}</h3>
                   <span
                     class="bridge-indicator"
                     :class="{
@@ -2633,6 +2656,7 @@ onBeforeUnmount(() => {
                     :aria-label="bridgeDetail"
                     role="status"
                   />
+                  <h3>{{ text('runtimeDetails') }}</h3>
                 </div>
                 <div class="status-runtime-body">
                   <dl
@@ -2654,8 +2678,18 @@ onBeforeUnmount(() => {
                       :href="projectRepositoryUrl"
                       target="_blank"
                       rel="noreferrer"
+                      :title="text('githubProject')"
+                      :aria-label="text('githubProject')"
                     >
-                      {{ text('githubProject') }}
+                      <svg
+                        class="status-github-icon"
+                        viewBox="0 0 24 24"
+                        fill="currentColor"
+                        aria-hidden="true"
+                      >
+                        <path d="M12 2C6.48 2 2 6.58 2 12.23c0 4.52 2.87 8.35 6.84 9.71.5.1.68-.22.68-.49 0-.24-.01-1.04-.01-1.88-2.78.62-3.37-1.21-3.37-1.21-.45-1.19-1.11-1.5-1.11-1.5-.91-.64.07-.63.07-.63 1 .08 1.53 1.06 1.53 1.06.9 1.57 2.35 1.12 2.92.86.09-.67.35-1.12.64-1.38-2.22-.26-4.56-1.15-4.56-5.12 0-1.13.39-2.05 1.03-2.78-.1-.26-.45-1.32.1-2.75 0 0 .84-.28 2.75 1.06A9.3 9.3 0 0 1 12 6.86c.85 0 1.7.12 2.5.35 1.91-1.34 2.75-1.06 2.75-1.06.55 1.43.2 2.49.1 2.75.64.73 1.03 1.65 1.03 2.78 0 3.98-2.34 4.86-4.57 5.11.36.32.68.93.68 1.88 0 1.36-.01 2.45-.01 2.78 0 .27.18.59.69.49A10.23 10.23 0 0 0 22 12.23C22 6.58 17.52 2 12 2Z" />
+                      </svg>
+                      <span>{{ text('githubProject') }}</span>
                     </a>
                   </div>
                 </div>
