@@ -509,6 +509,138 @@ const updateEndpointBaseUrl = (endpointType: string, value: string) => {
   editEndpointConfigs.value = next
 }
 
+// --- Provider list reorder via long-press ---
+const isDraggingProvider = ref(false)
+const draggingProviderId = ref<string | null>(null)
+const dragOverProviderId = ref<string | null>(null)
+let providerLongPressTimer: ReturnType<typeof setTimeout> | null = null
+let providerPointerStartX = 0
+let providerPointerStartY = 0
+let providerDragStartIndex = -1
+let providerDidDrag = false
+let providerActivePointerId: number | null = null
+
+const onProviderPointerDown = (event: PointerEvent, p: ProviderEntity, index: number) => {
+  if (providerSearchQuery.value.trim()) return
+  if (event.button !== 0) return
+
+  providerPointerStartX = event.clientX
+  providerPointerStartY = event.clientY
+  providerDragStartIndex = index
+  providerDidDrag = false
+  providerActivePointerId = event.pointerId
+
+  if (providerLongPressTimer) clearTimeout(providerLongPressTimer)
+  providerLongPressTimer = setTimeout(() => {
+    isDraggingProvider.value = true
+    draggingProviderId.value = p.id
+    dragOverProviderId.value = p.id
+    try {
+      (event.currentTarget as HTMLElement)?.setPointerCapture?.(event.pointerId)
+    } catch {
+      // ignore
+    }
+    if (typeof navigator !== 'undefined' && 'vibrate' in navigator) {
+      try {
+        navigator.vibrate(35)
+      } catch {
+        // ignore
+      }
+    }
+  }, 250)
+}
+
+const onProviderPointerMove = (event: PointerEvent) => {
+  if (!isDraggingProvider.value) {
+    if (
+      providerLongPressTimer &&
+      Math.hypot(event.clientX - providerPointerStartX, event.clientY - providerPointerStartY) > 8
+    ) {
+      clearTimeout(providerLongPressTimer)
+      providerLongPressTimer = null
+    }
+    return
+  }
+
+  event.preventDefault()
+  providerDidDrag = true
+
+  const el = document.elementFromPoint(event.clientX, event.clientY)?.closest('.provider-list-item') as HTMLElement | null
+  const targetId = el?.getAttribute('data-provider-id')
+  if (targetId && targetId !== draggingProviderId.value) {
+    dragOverProviderId.value = targetId
+    const currentList = [...providers.value]
+    const fromIdx = currentList.findIndex((item) => item.id === draggingProviderId.value)
+    const toIdx = currentList.findIndex((item) => item.id === targetId)
+    if (fromIdx !== -1 && toIdx !== -1 && fromIdx !== toIdx) {
+      const [moved] = currentList.splice(fromIdx, 1)
+      if (moved) {
+        currentList.splice(toIdx, 0, moved)
+        providers.value = currentList
+      }
+    }
+  }
+}
+
+const onProviderPointerUp = async (event: PointerEvent) => {
+  if (providerLongPressTimer) {
+    clearTimeout(providerLongPressTimer)
+    providerLongPressTimer = null
+  }
+
+  if (providerActivePointerId !== null) {
+    try {
+      (event.currentTarget as HTMLElement)?.releasePointerCapture?.(providerActivePointerId)
+    } catch {
+      // ignore
+    }
+    providerActivePointerId = null
+  }
+
+  if (isDraggingProvider.value) {
+    const movedId = draggingProviderId.value
+    isDraggingProvider.value = false
+    draggingProviderId.value = null
+    dragOverProviderId.value = null
+
+    if (providerDidDrag && movedId) {
+      const finalIndex = providers.value.findIndex((p) => p.id === movedId)
+      if (finalIndex !== -1 && finalIndex !== providerDragStartIndex) {
+        let anchor: { position: 'first' } | { position: 'last' } | { after: string }
+        const prevProvider = providers.value[finalIndex - 1]
+        if (finalIndex === 0 || !prevProvider) {
+          anchor = { position: 'first' }
+        } else if (finalIndex === providers.value.length - 1) {
+          anchor = { position: 'last' }
+        } else {
+          anchor = { after: prevProvider.id }
+        }
+
+        try {
+          await props.httpClient.patchJson(
+            `/api/data/providers/${encodeURIComponent(movedId)}/order`,
+            anchor
+          )
+          showToast(text('providerOrderUpdated'))
+          emit('settingsChanged')
+        } catch (err: unknown) {
+          showError(err instanceof Error ? err.message : 'Reorder failed')
+          await loadProviders()
+        }
+      }
+    }
+  }
+}
+
+const onProviderClick = (id: string) => {
+  if (providerDidDrag) {
+    providerDidDrag = false
+    return
+  }
+  selectProvider(id)
+  if (isMobileLayout.value) showProvidersDrawer.value = false
+}
+
 const openCreateProvider = () => {
   selectedProviderId.value = ''
   showCreateProviderForm.value = true
@@ -770,8 +902,9 @@ const pullModels = async () => {
     const fetched = res?.models ?? []
     if (fetched.length > 0) {
       fetchedModels.value = fetched
-      selectedFetchedModelIds.value = new Set(fetched.map((model) => model.id))
-      selectedStaleModelIds.value = new Set(staleModels.value.map((model) => model.id))
+      const existingIds = new Set(currentProviderModels.value.map((model) => model.id))
+      selectedFetchedModelIds.value = new Set(fetched.filter((model) => existingIds.has(model.id)).map((model) => model.id))
+      selectedStaleModelIds.value = new Set()
       showFetchedModelsDialog.value = true
     } else {
       showToast(text('noModelsFound'))
@@ -783,17 +916,17 @@ const pullModels = async () => {
   }
 }
 
-const toggleFetchedModel = (modelId: string, selected: boolean) => {
+const toggleFetchedModel = (modelId: string) => {
   const next = new Set(selectedFetchedModelIds.value)
-  if (selected) next.add(modelId)
-  else next.delete(modelId)
+  if (next.has(modelId)) next.delete(modelId)
+  else next.add(modelId)
   selectedFetchedModelIds.value = next
 }
 
-const toggleStaleModel = (modelId: string, selected: boolean) => {
+const toggleStaleModel = (modelId: string) => {
   const next = new Set(selectedStaleModelIds.value)
-  if (selected) next.add(modelId)
-  else next.delete(modelId)
+  if (next.has(modelId)) next.delete(modelId)
+  else next.add(modelId)
   selectedStaleModelIds.value = next
 }
 
@@ -802,6 +935,7 @@ const addAllFetchedModels = () => {
 }
 
 const removeAllStaleModels = () => {
+  selectedFetchedModelIds.value = new Set()
   selectedStaleModelIds.value = new Set(staleModels.value.map((model) => model.id))
 }
 
@@ -822,11 +956,18 @@ const applyModelSync = async () => {
         contextWindow: model.contextWindow
       }))
 
+    const toRemoveSet = new Set<string>(selectedStaleModelIds.value)
+    for (const m of currentProviderModels.value) {
+      if (fetchedModelIdSet.value.has(m.id) && !selectedFetchedModelIds.value.has(m.id)) {
+        toRemoveSet.add(m.id)
+      }
+    }
+
     await props.httpClient.postJson(
       `/api/data/providers/${encodeURIComponent(selectedProvider.value.id)}/models:reconcile`,
       {
         toAdd,
-        toRemove: Array.from(selectedStaleModelIds.value)
+        toRemove: Array.from(toRemoveSet)
       }
     )
     await loadModels()
@@ -1591,7 +1732,7 @@ onBeforeUnmount(() => {
                   <div class="panel-section-header">
                     <button
                       v-if="isMobileLayout"
-                      class="agents-list-fab"
+                      class="settings-btn settings-btn-sm agents-list-fab"
                       type="button"
                       :title="text('agentsManagement')"
                       :aria-label="text('agentsManagement')"
@@ -1611,7 +1752,7 @@ onBeforeUnmount(() => {
                         {{ text('delete') }}
                       </button>
                       <button
-                        class="settings-btn settings-btn-primary"
+                        class="settings-btn settings-btn-sm settings-btn-primary"
                         type="button"
                         :disabled="isSavingAgent || !editAgentName.trim()"
                         @click="showNewAgentDrawer ? createAgent() : saveAgent()"
@@ -1719,17 +1860,26 @@ onBeforeUnmount(() => {
                 </div>
                 <div class="providers-list">
                   <div
-                    v-for="p in filteredProviders"
+                    v-for="(p, index) in filteredProviders"
                     :key="p.id"
                     class="provider-list-item"
-                    :class="{ 'provider-list-item-selected': p.id === selectedProviderId }"
-                    @click="selectProvider(p.id); if (isMobileLayout) showProvidersDrawer = false"
+                    :class="{
+                      'provider-list-item-selected': p.id === selectedProviderId,
+                      'provider-list-item-dragging': isDraggingProvider && draggingProviderId === p.id,
+                      'provider-list-item-drag-over': isDraggingProvider && dragOverProviderId === p.id
+                    }"
+                    :data-provider-id="p.id"
+                    @click="onProviderClick(p.id)"
+                    @pointerdown="onProviderPointerDown($event, p, index)"
+                    @pointermove="onProviderPointerMove($event)"
+                    @pointerup="onProviderPointerUp($event)"
+                    @pointercancel="onProviderPointerUp($event)"
                   >
                     <div class="provider-item-info">
                       <span class="provider-item-name">{{ p.name || p.id }}</span>
                       <span class="provider-item-id">{{ p.id }}</span>
                     </div>
-                    <label class="settings-switch" @click.stop>
+                    <label class="settings-switch" @click.stop @pointerdown.stop>
                       <input
                         type="checkbox"
                         :checked="p.isEnabled !== false"
@@ -1748,7 +1898,7 @@ onBeforeUnmount(() => {
                 <div class="panel-section-header">
                   <button
                     v-if="isMobileLayout"
-                    class="providers-list-fab"
+                    class="settings-btn settings-btn-sm providers-list-fab"
                     type="button"
                     :title="text('modelProviders')"
                     :aria-label="text('modelProviders')"
@@ -1768,7 +1918,7 @@ onBeforeUnmount(() => {
                       {{ text('delete') }}
                     </button>
                     <button
-                      class="settings-btn settings-btn-primary"
+                      class="settings-btn settings-btn-sm settings-btn-primary"
                       type="button"
                       :disabled="isSavingProvider"
                       @click="saveProviderDetails"
@@ -1973,14 +2123,26 @@ onBeforeUnmount(() => {
                           <span class="model-row-name">{{ m.name || m.modelId }}</span>
                           <span class="model-row-id">{{ m.modelId }}</span>
                         </div>
-                        <label class="settings-switch">
-                          <input
-                            type="checkbox"
-                            :checked="selectedFetchedModelIds.has(m.id)"
-                            @change="toggleFetchedModel(m.id, ($event.target as HTMLInputElement).checked)"
-                          />
-                          <span class="settings-slider" />
-                        </label>
+                        <div class="model-row-controls">
+                          <button
+                            class="settings-btn settings-btn-sm settings-btn-secondary"
+                            type="button"
+                            :disabled="testingModelId === m.id"
+                            :title="text('testModel')"
+                            @click.stop="testModel(m)"
+                          >
+                            <span v-if="testingModelId === m.id" class="spinner-inline" />
+                            <span v-else>⚡ {{ text('test') }}</span>
+                          </button>
+                          <button
+                            class="settings-btn settings-btn-sm"
+                            :class="selectedFetchedModelIds.has(m.id) ? 'settings-btn-danger' : 'settings-btn-primary'"
+                            type="button"
+                            @click.stop="toggleFetchedModel(m.id)"
+                          >
+                            {{ selectedFetchedModelIds.has(m.id) ? text('delete') : text('add') }}
+                          </button>
+                        </div>
                       </div>
                       <template v-if="staleModels.length > 0">
                         <p class="fetched-models-stale-label">{{ text('staleModelsLabel') }} ({{ staleModels.length }})</p>
@@ -1989,14 +2151,26 @@ onBeforeUnmount(() => {
                             <span class="model-row-name">{{ m.name || m.modelId || m.id }}</span>
                             <span class="model-row-id">{{ m.modelId || m.id }}</span>
                           </div>
-                          <label class="settings-switch">
-                            <input
-                              type="checkbox"
-                              :checked="selectedStaleModelIds.has(m.id)"
-                              @change="toggleStaleModel(m.id, ($event.target as HTMLInputElement).checked)"
-                            />
-                            <span class="settings-slider" />
-                          </label>
+                          <div class="model-row-controls">
+                            <button
+                              class="settings-btn settings-btn-sm settings-btn-secondary"
+                              type="button"
+                              :disabled="testingModelId === m.id"
+                              :title="text('testModel')"
+                              @click.stop="testModel(m)"
+                            >
+                              <span v-if="testingModelId === m.id" class="spinner-inline" />
+                              <span v-else>⚡ {{ text('test') }}</span>
+                            </button>
+                            <button
+                              class="settings-btn settings-btn-sm"
+                              :class="selectedStaleModelIds.has(m.id) ? 'settings-btn-danger' : 'settings-btn-secondary'"
+                              type="button"
+                              @click.stop="toggleStaleModel(m.id)"
+                            >
+                              {{ selectedStaleModelIds.has(m.id) ? text('delete') : text('cancel') }}
+                            </button>
+                          </div>
                         </div>
                       </template>
                     </div>
@@ -2047,7 +2221,22 @@ onBeforeUnmount(() => {
                           :title="text('delete')"
                           @click="deleteModel(m)"
                         >
-                          🗑
+                          <svg
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="2"
+                            stroke-linecap="round"
+                            stroke-linejoin="round"
+                            class="settings-btn-icon-svg"
+                            aria-hidden="true"
+                          >
+                            <path d="M3 6h18" />
+                            <path d="M8 6V4h8v2" />
+                            <path d="m19 6-1 14H6L5 6" />
+                            <path d="M10 11v5" />
+                            <path d="M14 11v5" />
+                          </svg>
                         </button>
                       </div>
                     </div>
@@ -2061,11 +2250,11 @@ onBeforeUnmount(() => {
                 <div class="panel-section-header">
                   <h3>{{ text('newProvider') }}</h3>
                   <div class="section-actions">
-                    <button class="settings-btn settings-btn-secondary" type="button" @click="showCreateProviderForm = false">
+                    <button class="settings-btn settings-btn-sm settings-btn-secondary" type="button" @click="showCreateProviderForm = false">
                       {{ text('cancel') }}
                     </button>
                     <button
-                      class="settings-btn settings-btn-primary"
+                      class="settings-btn settings-btn-sm settings-btn-primary"
                       type="button"
                       :disabled="isCreatingProvider || !editProviderName.trim()"
                       @click="createCustomProvider"
@@ -2174,7 +2363,7 @@ onBeforeUnmount(() => {
                         {{ text('delete') }}
                       </button>
                       <button
-                        class="settings-btn settings-btn-primary"
+                        class="settings-btn settings-btn-sm settings-btn-primary"
                         type="button"
                         :disabled="isSavingPrompt || !editPromptTitle.trim() || !editPromptContent.trim()"
                         @click="showNewPromptDrawer ? createPrompt() : savePrompt()"
@@ -2451,7 +2640,7 @@ onBeforeUnmount(() => {
                     <p class="preference-section-desc">{{ text('contextManagementDesc') }}</p>
                   </div>
                   <button
-                    class="settings-btn settings-btn-primary"
+                    class="settings-btn settings-btn-sm settings-btn-primary"
                     type="button"
                     :disabled="isSavingPreferences"
                     @click="saveContextPreferences"
@@ -2530,7 +2719,7 @@ onBeforeUnmount(() => {
                 <div class="panel-section-header">
                   <h3>{{ text('webSearchSettings') }}</h3>
                   <button
-                    class="settings-btn settings-btn-primary"
+                    class="settings-btn settings-btn-sm settings-btn-primary"
                     type="button"
                     :disabled="isSavingPreferences"
                     @click="saveWebSearchPreferences"
@@ -2646,6 +2835,7 @@ onBeforeUnmount(() => {
 
               <section class="help-runtime-section">
                 <div class="help-runtime-header">
+                  <h3>{{ text('runtimeDetails') }}</h3>
                   <span
                     class="bridge-indicator"
                     :class="{
@@ -2656,7 +2846,6 @@ onBeforeUnmount(() => {
                     :aria-label="bridgeDetail"
                     role="status"
                   />
-                  <h3>{{ text('runtimeDetails') }}</h3>
                 </div>
                 <div class="status-runtime-body">
                   <dl
@@ -2674,7 +2863,7 @@ onBeforeUnmount(() => {
                       <dd>{{ item.value }}</dd>
                     </dl>
                     <a
-                      class="status-github-link settings-help-repository"
+                      class="settings-help-github-link"
                       :href="projectRepositoryUrl"
                       target="_blank"
                       rel="noreferrer"
@@ -2682,14 +2871,13 @@ onBeforeUnmount(() => {
                       :aria-label="text('githubProject')"
                     >
                       <svg
-                        class="status-github-icon"
+                        class="settings-help-github-icon"
                         viewBox="0 0 24 24"
                         fill="currentColor"
                         aria-hidden="true"
                       >
                         <path d="M12 2C6.48 2 2 6.58 2 12.23c0 4.52 2.87 8.35 6.84 9.71.5.1.68-.22.68-.49 0-.24-.01-1.04-.01-1.88-2.78.62-3.37-1.21-3.37-1.21-.45-1.19-1.11-1.5-1.11-1.5-.91-.64.07-.63.07-.63 1 .08 1.53 1.06 1.53 1.06.9 1.57 2.35 1.12 2.92.86.09-.67.35-1.12.64-1.38-2.22-.26-4.56-1.15-4.56-5.12 0-1.13.39-2.05 1.03-2.78-.1-.26-.45-1.32.1-2.75 0 0 .84-.28 2.75 1.06A9.3 9.3 0 0 1 12 6.86c.85 0 1.7.12 2.5.35 1.91-1.34 2.75-1.06 2.75-1.06.55 1.43.2 2.49.1 2.75.64.73 1.03 1.65 1.03 2.78 0 3.98-2.34 4.86-4.57 5.11.36.32.68.93.68 1.88 0 1.36-.01 2.45-.01 2.78 0 .27.18.59.69.49A10.23 10.23 0 0 0 22 12.23C22 6.58 17.52 2 12 2Z" />
                       </svg>
-                      <span>{{ text('githubProject') }}</span>
                     </a>
                   </div>
                 </div>

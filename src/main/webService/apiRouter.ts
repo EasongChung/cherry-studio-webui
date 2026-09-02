@@ -236,6 +236,8 @@ const writableDataApiPatterns = [
   { pattern: /^\/providers\/[^/]+\/api-keys$/, methods: ['POST', 'PUT'] },
   { pattern: /^\/providers\/[^/]+\/api-keys\/[^/]+$/, methods: ['PATCH', 'DELETE'] },
   { pattern: /^\/providers\/[^/]+\/models:reconcile$/, methods: ['POST'] },
+  { pattern: /^\/providers\/order:batch$/, methods: ['PATCH'] },
+  { pattern: /^\/providers\/[^/]+\/order$/, methods: ['PATCH'] },
   { pattern: /^\/models$/, methods: ['POST'] },
   { pattern: /^\/models\/[^/]+$/, methods: ['PATCH', 'PUT', 'DELETE'] },
   { pattern: /^\/prompts$/, methods: ['POST'] },
