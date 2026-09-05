@@ -7,12 +7,13 @@ import jaJP from '@renderer/i18n/locales/ja-jp.json'
 import ptPT from '@renderer/i18n/locales/pt-pt.json'
 import roRO from '@renderer/i18n/locales/ro-ro.json'
 import ruRU from '@renderer/i18n/locales/ru-ru.json'
+import trTR from '@renderer/i18n/locales/tr-tr.json'
 import viVN from '@renderer/i18n/locales/vi-vn.json'
 import zhCN from '@renderer/i18n/locales/zh-cn.json'
 import zhTW from '@renderer/i18n/locales/zh-tw.json'
 import { describe, expect, it } from 'vitest'
 
-const locales = { deDE, elGR, enUS, esES, frFR, jaJP, ptPT, roRO, ruRU, viVN, zhCN, zhTW }
+const locales = { deDE, elGR, enUS, esES, frFR, jaJP, ptPT, roRO, ruRU, trTR, viVN, zhCN, zhTW }
 const requiredKeys = [
   'settings.webui.access_key',
   'settings.webui.access_key_generated',
