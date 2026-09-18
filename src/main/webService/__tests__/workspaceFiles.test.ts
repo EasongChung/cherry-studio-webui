@@ -31,8 +31,7 @@ describe('WebUI workspace file boundary', () => {
   })
 
   it('resolves an existing workspace-relative file', async () => {
-    const filePath = path.join(workspacePath, 'docs', 'notes.md')
-    await writeFile(filePath, '# Notes')
+    await writeFile(path.join(workspacePath, 'docs', 'notes.md'), '# Notes')
 
     const result = await resolveWebUiWorkspacePath(workspacePath, 'docs/notes.md')
 
@@ -40,87 +39,69 @@ describe('WebUI workspace file boundary', () => {
       await resolveWebUiWorkspacePath(workspacePath, 'docs\\notes.md').then((v) => v.requestedRealPath)
     )
     expect(result.relativePath).toBe('docs/notes.md')
-    expect(result.scope).toBe('workspace')
   })
 
-  it.each(['../outside.txt', 'docs/../../outside.txt', '/outside.txt', 'C:/outside.txt'])(
-    'rejects unsafe requested path %s when it is handled as a workspace-relative path',
+  it.each(['../outside.txt', 'docs/../../outside.txt'])('rejects traversal path %s', async (requestedPath) => {
+    await expect(resolveWebUiWorkspacePath(workspacePath, requestedPath)).rejects.toMatchObject({
+      status: 403,
+      code: 'WEBUI_WORKSPACE_PATH_BLOCKED'
+    })
+  })
+
+  it.each(['/outside.txt', 'C:/outside.txt', '~/outside.txt'])(
+    'rejects out-of-workspace path %s',
     async (requestedPath) => {
-      if (path.isAbsolute(requestedPath) || /^[A-Za-z]:/.test(requestedPath)) {
-        await expect(resolveWebUiWorkspacePath(workspacePath, requestedPath)).rejects.toMatchObject({
-          status: 404
-        })
-        return
-      }
-      await expect(resolveWebUiWorkspacePath(workspacePath, requestedPath)).rejects.toBeInstanceOf(
-        WebUiWorkspaceFileError
-      )
+      await expect(resolveWebUiWorkspacePath(workspacePath, requestedPath)).rejects.toMatchObject({
+        status: 400,
+        code: 'WEBUI_INVALID_WORKSPACE_PATH'
+      })
     }
   )
 
-  it('allows a symbolic-link escape from the workspace when the resolved target is not blocked', async () => {
+  it('rejects a symbolic-link escape out of the workspace', async () => {
     await writeFile(path.join(outsidePath, 'public.txt'), 'public')
     await symlink(outsidePath, path.join(workspacePath, 'escape'), process.platform === 'win32' ? 'junction' : 'dir')
 
-    await expect(resolveWebUiWorkspacePath(workspacePath, 'escape/public.txt')).resolves.toMatchObject({
-      scope: 'external',
-      relativePath: expect.stringMatching(/cherry-webui-outside-.+\/public\.txt$/)
+    await expect(resolveWebUiWorkspacePath(workspacePath, 'escape/public.txt')).rejects.toMatchObject({
+      status: 403,
+      code: 'WEBUI_WORKSPACE_PATH_BLOCKED'
     })
   })
 
-  it('allows read-only preview for non-workspace absolute files', async () => {
+  it('rejects read-only preview of an out-of-workspace absolute file', async () => {
     const filePath = path.join(outsidePath, 'public.txt')
     await writeFile(filePath, 'outside but readable')
 
-    await expect(readWebUiWorkspaceTextFile(workspacePath, filePath)).resolves.toMatchObject({
-      kind: 'text',
-      content: 'outside but readable',
-      path: expect.stringMatching(/cherry-webui-outside-.+\/public\.txt$/)
-    })
+    await expect(readWebUiWorkspaceTextFile(workspacePath, filePath)).rejects.toBeInstanceOf(WebUiWorkspaceFileError)
   })
 
-  it('lists non-workspace directories while filtering blocked children when the directory lister is available', async () => {
+  it('rejects listing an out-of-workspace directory', async () => {
     await writeFile(path.join(outsidePath, 'public.txt'), 'ok')
-    await writeFile(path.join(outsidePath, '.secret'), 'hidden')
 
-    try {
-      const result = await listWebUiWorkspaceFiles(workspacePath, outsidePath, '')
-
-      expect(result.directory).toEqual(expect.stringMatching(/cherry-webui-outside-/))
-      expect(result.entries).toEqual([
-        expect.objectContaining({
-          isDirectory: false,
-          name: 'public.txt',
-          path: expect.stringMatching(/cherry-webui-outside-.+\/public\.txt$/)
-        })
-      ])
-    } catch (error) {
-      if (!(error instanceof Error) || error.message !== 'Ripgrep binary not available') throw error
-    }
+    await expect(listWebUiWorkspaceFiles(workspacePath, outsidePath, '')).rejects.toBeInstanceOf(WebUiWorkspaceFileError)
   })
 
-  it('rejects hidden files and hidden directories outside the workspace', async () => {
-    await mkdir(path.join(outsidePath, '.ssh'))
-    await writeFile(path.join(outsidePath, '.env'), 'secret')
-    await writeFile(path.join(outsidePath, '.ssh', 'config'), 'secret')
+  it('rejects hidden files and hidden directories inside the workspace', async () => {
+    await mkdir(path.join(workspacePath, '.ssh'))
+    await writeFile(path.join(workspacePath, '.env'), 'secret')
+    await writeFile(path.join(workspacePath, '.ssh', 'config'), 'secret')
 
-    await expect(readWebUiWorkspaceTextFile(workspacePath, path.join(outsidePath, '.env'))).rejects.toMatchObject({
+    await expect(readWebUiWorkspaceTextFile(workspacePath, '.env')).rejects.toMatchObject({
       status: 403,
       code: 'WEBUI_WORKSPACE_PATH_BLOCKED'
     })
-    await expect(
-      readWebUiWorkspaceTextFile(workspacePath, path.join(outsidePath, '.ssh', 'config'))
-    ).rejects.toMatchObject({
+    await expect(readWebUiWorkspaceTextFile(workspacePath, '.ssh/config')).rejects.toMatchObject({
       status: 403,
       code: 'WEBUI_WORKSPACE_PATH_BLOCKED'
     })
   })
 
-  it('rejects application installation paths', async () => {
-    const filePath = path.join(appRootPath, 'app.asar')
-    await writeFile(filePath, 'app')
+  it('rejects files inside the application installation root', async () => {
+    const nestedWorkspace = path.join(appRootPath, 'workspace')
+    await mkdir(nestedWorkspace)
+    await writeFile(path.join(nestedWorkspace, 'app.asar'), 'app')
 
-    await expect(readWebUiWorkspaceTextFile(workspacePath, filePath, { appRootPath })).rejects.toMatchObject({
+    await expect(readWebUiWorkspaceTextFile(nestedWorkspace, 'app.asar', { appRootPath })).rejects.toMatchObject({
       status: 403,
       code: 'WEBUI_WORKSPACE_PATH_BLOCKED'
     })
