@@ -193,6 +193,8 @@ const App = defineComponent({
     })
     const language = ref(normalizeLanguage(navigator.language))
     const languageOverride = ref(false)
+    // Sync the <html> lang attribute whenever the bridge reports a different locale.
+    watch(language, (lang) => { if (lang) document.documentElement.lang = lang })
     const languagePickerOpen = ref(false)
     const settingsModalOpen = ref(false)
     const authRequired = ref(false)
@@ -5037,7 +5039,6 @@ const App = defineComponent({
       }
 
       httpClient.setAuthKey(key)
-      sseClient.setAuthKey(key)
       try {
         await refreshHealth()
         // Best-effort: persist (or clear) the remember-verification cookie via the desktop bridge.
@@ -5054,7 +5055,6 @@ const App = defineComponent({
         startAuthenticatedSession()
       } catch {
         httpClient.setAuthKey('')
-        sseClient.setAuthKey('')
         authError.value = text('invalidKey')
         isAuthenticated.value = false
       }

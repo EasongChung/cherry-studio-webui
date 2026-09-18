@@ -1,5 +1,5 @@
 import { mount } from '@vue/test-utils'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 
 import type { WebUiAgentStatus, WebUiAgentTask } from '../../utils/agentStatus'
 import type { TextKey } from '../../utils/textPacks'
@@ -23,6 +23,14 @@ const mountWidget = (over: { tasks?: readonly WebUiAgentTask[]; streaming?: bool
       text
     }
   })
+
+// jsdom 30 lacks PointerEvent, and MouseEventInit rejects `pointerId`; route around both.
+const pointerEvent = (type: string, clientX: number, clientY: number, pointerId = 1) => {
+  const init: { clientX: number; clientY: number; bubbles: true } = { bubbles: true, clientX, clientY }
+  return typeof PointerEvent !== 'undefined'
+    ? new PointerEvent(type, { ...init, pointerId })
+    : Object.assign(new MouseEvent(type, init), { pointerId })
+}
 
 const sampleTasks: readonly WebUiAgentTask[] = [
   { id: '1', title: 'Read config', status: 'completed' },
@@ -53,6 +61,37 @@ describe('TaskProgressWidget', () => {
     await wrapper.find('button.task-progress-collapse').trigger('click')
     expect(wrapper.find('.task-progress-panel').exists()).toBe(false)
     expect(wrapper.find('button.task-progress-ball').exists()).toBe(true)
+  })
+
+  // jsdom implements no pointer-capture retargeting, so the click above stays green even
+  // when a browser would route it to the drag handle. Assert the capture contract instead.
+  it('never captures the pointer for a press that starts on the collapse control', async () => {
+    const wrapper = mountWidget({ tasks: sampleTasks })
+    await wrapper.find('button.task-progress-ball').trigger('click')
+
+    const header = wrapper.find('.task-progress-header').element as HTMLElement
+    const capture = vi.fn()
+    header.setPointerCapture = capture
+
+    const collapse = wrapper.find('button.task-progress-collapse')
+    collapse.element.dispatchEvent(pointerEvent('pointerdown', 10, 10))
+    expect(capture).not.toHaveBeenCalled()
+
+    await collapse.trigger('click')
+    expect(wrapper.find('.task-progress-panel').exists()).toBe(false)
+  })
+
+  it('does not expand the ball when the press was a drag', async () => {
+    const wrapper = mountWidget({ tasks: sampleTasks })
+    const ball = wrapper.find('button.task-progress-ball')
+    ;(ball.element as HTMLElement).setPointerCapture = vi.fn()
+
+    ball.element.dispatchEvent(pointerEvent('pointerdown', 100, 100))
+    ball.element.dispatchEvent(pointerEvent('pointermove', 180, 160))
+    await wrapper.vm.$nextTick()
+    await ball.trigger('click')
+
+    expect(wrapper.find('.task-progress-panel').exists()).toBe(false)
   })
 
   it('enables the abort button only while streaming and emits abort', async () => {

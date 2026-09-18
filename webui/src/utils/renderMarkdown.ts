@@ -106,16 +106,35 @@ const preprocessTable = (source: string): string => {
     return t.replace(/^\|/, '').replace(/\|$/, '').split('|').every((c) => /^\s*:?-+:?\s*$/.test(c))
   }
   const makeSep = (cols: number) => `| ${Array.from({ length: cols }, () => '---').join(' | ')} |`
+  // markdown-it rejects a table whose separator column count differs from the header's and
+  // falls back to a paragraph, which would print the raw `| --- |` row. Re-shape the row to
+  // the header's column count so a half-typed separator still keeps the table parseable.
+  const shapeSep = (line: string, cols: number) => {
+    const indent = line.match(/^\s*/)?.[0] ?? ''
+    const cells = line.trim().replace(/^\|/, '').replace(/\|$/, '').split('|')
+    const align = (cell: string) => {
+      const left = cell.trim().startsWith(':')
+      const right = cell.trim().endsWith(':')
+      if (left && right) return ':---:'
+      if (left) return ':---'
+      return right ? '---:' : '---'
+    }
+    return `${indent}| ${Array.from({ length: cols }, (_, index) => (cells[index] ? align(cells[index]!) : '---')).join(' | ')} |`
+  }
   const fixBlock = (block: string[]): string[] => {
     const cols = cellCount(block[0] ?? '')
     if (cols < 2) return block
     const delimAt = block.findIndex((line, idx) => idx > 0 && isDelimiter(line))
-    // Inject a separator only when the model has not emitted one yet; never duplicate an existing row.
-    const fixed = delimAt === -1 ? [block[0] ?? '', makeSep(cols), ...block.slice(1)] : block.slice()
+    // Inject a separator only when the model has not emitted one yet; a repeated separator
+    // would otherwise render as a literal `---` data row, so keep only the first one.
+    const rows = (delimAt === -1 ? [block[0] ?? '', makeSep(cols), ...block.slice(1)] : block.slice()).filter(
+      (line, idx) => idx <= 1 || !isDelimiter(line)
+    )
+    const fixed = rows.map((line, idx) => (idx === 1 ? shapeSep(line, cols) : line))
     // Pad a half-typed trailing data row so its last cell parses while streaming.
     const lastIdx = fixed.length - 1
     const last = fixed[lastIdx]
-    if (last && !isDelimiter(last)) {
+    if (lastIdx > 1 && last && !isDelimiter(last)) {
       let row = last.trim()
       if (!row.endsWith('|')) row = `${row} |`
       for (let n = cellCount(row); n < cols; n++) row = `${row}  |`

@@ -28,16 +28,30 @@ const widgetStyle = () =>
     ? { left: `${position.value.x}px`, top: `${position.value.y}px`, right: 'auto', bottom: 'auto' }
     : undefined
 
+const DRAG_THRESHOLD = 4
+
 let dragOffset = { x: 0, y: 0 }
+let dragOrigin = { x: 0, y: 0 }
+let dragMoved = false
+
 const onPointerDown = (event: PointerEvent) => {
+  // The collapse control sits inside the drag handle. Capturing its pointer would retarget
+  // the following click to the handle, so the panel could never close again.
+  if ((event.target as Element | null)?.closest('.task-progress-collapse')) return
+
   const el = event.currentTarget as HTMLElement
   const rect = el.getBoundingClientRect()
   dragOffset = { x: event.clientX - rect.left, y: event.clientY - rect.top }
+  dragOrigin = { x: event.clientX, y: event.clientY }
+  dragMoved = false
   dragging.value = true
   el.setPointerCapture?.(event.pointerId)
 }
 const onPointerMove = (event: PointerEvent) => {
   if (!dragging.value) return
+  if (!dragMoved && Math.hypot(event.clientX - dragOrigin.x, event.clientY - dragOrigin.y) < DRAG_THRESHOLD) return
+  dragMoved = true
+
   const widget = el$()
   const pad = 8
   let x = event.clientX - dragOffset.x
@@ -45,6 +59,11 @@ const onPointerMove = (event: PointerEvent) => {
   x = Math.min(Math.max(pad, x), window.innerWidth - (widget?.offsetWidth ?? 0) - pad)
   y = Math.min(Math.max(pad, y), window.innerHeight - (widget?.offsetHeight ?? 0) - pad)
   position.value = { x, y }
+}
+// A drag release must not count as a click, or the ball expands every time it is moved.
+const onBallClick = () => {
+  if (dragMoved) return
+  expanded.value = true
 }
 const onPointerUp = (event: PointerEvent) => {
   dragging.value = false
@@ -67,7 +86,7 @@ const el$ = () => (typeof document === 'undefined' ? undefined : document.queryS
       type="button"
       :aria-label="text('taskProgressTitle')"
       :title="headline"
-      @click="expanded = true"
+      @click="onBallClick"
       @pointerdown="onPointerDown"
       @pointermove="onPointerMove"
       @pointerup="onPointerUp"

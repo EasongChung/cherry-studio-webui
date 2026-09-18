@@ -36,4 +36,35 @@ describe('renderMarkdown table preprocessing', () => {
     expect(dashCells(html)).toHaveLength(0)
     expect(html).toContain('<td>CPU</td>')
   })
+
+  it('keeps the table parseable while the separator row is still half-typed', () => {
+    // A separator with fewer columns than the header would drop markdown-it back to a
+    // paragraph, printing the raw `| --- |` line at the reader.
+    const html = renderMarkdown('| 名称 | 值 |\n| ---')
+    expect(html).toContain('<table>')
+    expect(html).not.toContain('| ---')
+    expect(dashCells(html)).toHaveLength(0)
+  })
+
+  it('ignores separator columns beyond the header column count', () => {
+    const html = renderMarkdown('| 名称 | 值 |\n| --- | --- | --- |\n| CPU | 8 |')
+    expect(html).toContain('<table>')
+    expect(html).not.toContain('| ---')
+    expect(html).toContain('<td>CPU</td>')
+    expect(dashCells(html)).toHaveLength(0)
+  })
+
+  it('drops a repeated separator row instead of rendering it as data', () => {
+    const html = renderMarkdown('| 名称 | 值 |\n| --- | --- |\n| --- | --- |\n| CPU | 8 |')
+    expect(html).toContain('<table>')
+    expect(dashCells(html)).toHaveLength(0)
+    expect(html).toContain('<td>CPU</td>')
+  })
+
+  it('preserves column alignment markers while reshaping the separator', () => {
+    const html = renderMarkdown('| 名称 | 值 |\n| :--- | ---: |\n| CPU | 8 |')
+    expect(html).toContain('text-align:left')
+    expect(html).toContain('text-align:right')
+    expect(dashCells(html)).toHaveLength(0)
+  })
 })

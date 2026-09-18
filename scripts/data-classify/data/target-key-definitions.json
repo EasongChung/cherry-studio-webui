@@ -827,6 +827,34 @@
       "defaultValue": "none",
       "status": "classified",
       "description": "Reasoning effort for the translate model; 'none' reproduces the hardcoded behaviour that predates this setting (v2 new feature, no v1 source)"
+    },
+    {
+      "targetKey": "feature.webui.auth_key",
+      "type": "string",
+      "defaultValue": "",
+      "status": "classified",
+      "description": "WebUI desktop bridge access key (required to start)"
+    },
+    {
+      "targetKey": "feature.webui.enabled",
+      "type": "boolean",
+      "defaultValue": false,
+      "status": "classified",
+      "description": "WebUI desktop bridge runtime switch"
+    },
+    {
+      "targetKey": "feature.webui.host",
+      "type": "string",
+      "defaultValue": "127.0.0.1",
+      "status": "classified",
+      "description": "WebUI desktop bridge listen host (127.0.0.1 | 0.0.0.0 | custom IPv4)"
+    },
+    {
+      "targetKey": "feature.webui.port",
+      "type": "number",
+      "defaultValue": 5820,
+      "status": "classified",
+      "description": "WebUI desktop bridge HTTP port"
     }
   ]
 }
