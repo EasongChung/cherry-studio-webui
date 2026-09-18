@@ -116,10 +116,16 @@ jobs:
         run: |
           $inputTag = "${{ github.event.inputs.release_tag }}"
           if ([string]::IsNullOrWhiteSpace($inputTag)) {
-            "tag=webui-${{ github.run_number }}" >> $env:GITHUB_OUTPUT
+            $tag = "webui-${{ github.run_number }}"
           } else {
-            "tag=$inputTag" >> $env:GITHUB_OUTPUT
+            # Fork-owned release namespace only: a manual tag must never be able to
+            # overwrite an arbitrary (e.g. upstream) release on this repository.
+            if ($inputTag -notmatch '^webui-[0-9]+$') {
+              throw "release_tag must match 'webui-<run-number>' (got '$inputTag')."
+            }
+            $tag = $inputTag
           }
+          "tag=$tag" >> $env:GITHUB_OUTPUT
 
       - name: Append release tag to package names
         shell: pwsh

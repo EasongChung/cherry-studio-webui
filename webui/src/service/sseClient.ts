@@ -10,7 +10,6 @@ export type WebUiSseClientOptions = {
 export type WebUiSseClient = {
   connect(): void
   close(): void
-  setAuthKey(key: string): void
   subscribe<TData = unknown>(event: WebUiSseEventName, handler: WebUiSseHandler<TData>): () => void
 }
 
@@ -28,7 +27,6 @@ export const createWebUiSseClient = ({
 }: WebUiSseClientOptions = {}): WebUiSseClient => {
   const handlers = new Map<WebUiSseEventName, Set<WebUiSseHandler>>()
   let eventSource: EventSource | undefined
-  let authKey = ''
 
   const dispatch = (eventName: WebUiSseEventName, event: Event) => {
     const messageEvent = event as MessageEvent<string>
@@ -45,9 +43,9 @@ export const createWebUiSseClient = ({
   const connect = () => {
     if (eventSource) return
 
-    const url = new URL(endpoint, window.location.origin)
-    if (authKey) url.searchParams.set('key', authKey)
-    eventSource = eventSourceFactory(`${url.pathname}${url.search}`)
+    // EventSource cannot set headers; the bridge authenticates it with the HttpOnly
+    // session cookie, so the access key must never travel in the query string.
+    eventSource = eventSourceFactory(endpoint)
     for (const eventName of eventNames) {
       eventSource.addEventListener(eventName, (event: Event) => dispatch(eventName, event))
     }
@@ -62,14 +60,6 @@ export const createWebUiSseClient = ({
     connect,
 
     close,
-
-    setAuthKey(key: string) {
-      authKey = key.trim()
-      if (eventSource) {
-        close()
-        connect()
-      }
-    },
 
     subscribe<TData = unknown>(event: WebUiSseEventName, handler: WebUiSseHandler<TData>) {
       const eventHandlers = handlers.get(event) ?? new Set<WebUiSseHandler>()

@@ -52,7 +52,6 @@ export class WebUiWorkspaceFileError extends Error {
 export type WebUiWorkspaceFileAccessOptions = {
   readonly appRootPath?: string
   readonly executablePath?: string
-  readonly homePath?: string
 }
 
 export type WebUiWorkspaceFileEntry = {
@@ -107,14 +106,6 @@ const isPathInside = (rootPath: string, candidatePath: string) => {
 }
 
 const isAbsoluteRequestPath = (value: string) => path.isAbsolute(value) || /^[A-Za-z]:[\\/]/.test(value)
-
-const expandHomePath = (value: string, homePath?: string) => {
-  if (!value.startsWith('~/') && !value.startsWith('~\\')) return value
-  if (!homePath) {
-    throw new WebUiWorkspaceFileError(400, 'WEBUI_INVALID_WORKSPACE_PATH', 'Home path is unavailable')
-  }
-  return path.join(homePath, value.slice(2))
-}
 
 const hasHiddenPathSegment = (value: string) =>
   normalizeDisplayPath(value)
@@ -192,11 +183,29 @@ export async function resolveWebUiWorkspacePath(
   readonly workspaceRealPath: string
   readonly requestedRealPath: string
   readonly relativePath: string
-  readonly scope: 'workspace' | 'external'
 }> {
   const rawPath = requestedPath.trim()
   if (rawPath.includes('\0')) {
     throw new WebUiWorkspaceFileError(400, 'WEBUI_INVALID_WORKSPACE_PATH', 'Workspace path is invalid')
+  }
+  // Absolute / home-relative / drive paths are rejected: file access is confined
+  // to the session workspace root (no external scope).
+  if (isAbsoluteRequestPath(rawPath) || rawPath.startsWith('~/') || rawPath.startsWith('~\\')) {
+    throw new WebUiWorkspaceFileError(
+      400,
+      'WEBUI_INVALID_WORKSPACE_PATH',
+      'Workspace path must be relative to the session workspace'
+    )
+  }
+
+  const relativePath = normalizeRelativePath(rawPath.replaceAll('\\', '/'))
+  assertRelativePath(relativePath)
+  if (relativePath.split('/').includes('..')) {
+    throw new WebUiWorkspaceFileError(
+      403,
+      'WEBUI_WORKSPACE_PATH_BLOCKED',
+      'Workspace path must stay inside the session workspace'
+    )
   }
 
   let workspaceRealPath: string
@@ -206,40 +215,38 @@ export async function resolveWebUiWorkspacePath(
     throw new WebUiWorkspaceFileError(404, 'WEBUI_WORKSPACE_FILE_NOT_FOUND', 'Workspace file was not found')
   }
 
-  const expandedPath = expandHomePath(rawPath, options.homePath)
-  const absoluteRequest = isAbsoluteRequestPath(expandedPath)
-  const relativePath = absoluteRequest ? '' : normalizeRelativePath(expandedPath)
-  if (!absoluteRequest) assertRelativePath(expandedPath.replaceAll('\\', '/'))
-
   let requestedRealPath: string
   try {
-    requestedRealPath = await realpath(absoluteRequest ? expandedPath : path.resolve(workspaceRealPath, relativePath))
+    requestedRealPath = await realpath(path.resolve(workspaceRealPath, relativePath))
   } catch {
     throw new WebUiWorkspaceFileError(404, 'WEBUI_WORKSPACE_FILE_NOT_FOUND', 'Workspace file was not found')
   }
 
-  const insideWorkspace = isPathInside(workspaceRealPath, requestedRealPath)
+  // Symlinks and mount points cannot escape the workspace root.
+  if (!isPathInside(workspaceRealPath, requestedRealPath)) {
+    throw new WebUiWorkspaceFileError(
+      403,
+      'WEBUI_WORKSPACE_PATH_BLOCKED',
+      'Workspace path must stay inside the session workspace'
+    )
+  }
 
   await assertAllowedResolvedPath(requestedRealPath, options)
 
   return {
     workspaceRealPath,
     requestedRealPath,
-    relativePath: insideWorkspace
-      ? path.relative(workspaceRealPath, requestedRealPath).split(path.sep).join('/')
-      : normalizeDisplayPath(requestedRealPath),
-    scope: insideWorkspace ? 'workspace' : 'external'
+    relativePath: path.relative(workspaceRealPath, requestedRealPath).split(path.sep).join('/')
   }
 }
 
 const toSafeEntry = async (
   rootRealPath: string,
   entry: { path: string; isDirectory: boolean },
-  scope: 'workspace' | 'external',
   options: WebUiWorkspaceFileAccessOptions
 ): Promise<WebUiWorkspaceFileEntry | undefined> => {
   const lexicalPath = path.resolve(entry.path)
-  if (scope === 'workspace' && !isPathInside(rootRealPath, lexicalPath)) return undefined
+  if (!isPathInside(rootRealPath, lexicalPath)) return undefined
 
   let resolvedPath: string
   try {
@@ -247,7 +254,7 @@ const toSafeEntry = async (
   } catch {
     return undefined
   }
-  if (scope === 'workspace' && !isPathInside(rootRealPath, resolvedPath)) return undefined
+  if (!isPathInside(rootRealPath, resolvedPath)) return undefined
 
   try {
     await assertAllowedResolvedPath(resolvedPath, options)
@@ -255,10 +262,7 @@ const toSafeEntry = async (
     return undefined
   }
 
-  const projectedPath =
-    scope === 'workspace'
-      ? path.relative(rootRealPath, lexicalPath).split(path.sep).join('/')
-      : normalizeDisplayPath(resolvedPath)
+  const projectedPath = path.relative(rootRealPath, lexicalPath).split(path.sep).join('/')
   if (!projectedPath) return undefined
   return {
     path: projectedPath,
@@ -288,10 +292,10 @@ export async function listWebUiWorkspaceFiles(
       ? { recursive: true, maxDepth: 0, maxEntries: MAX_SEARCH_ENTRIES, searchPattern: normalizedSearch }
       : { recursive: false, maxDepth: 1 })
   })
-  const projectionRoot = target.scope === 'workspace' ? target.workspaceRealPath : target.requestedRealPath
-  const projected = (
-    await Promise.all(entries.map((entry) => toSafeEntry(projectionRoot, entry, target.scope, options)))
-  ).filter((entry): entry is WebUiWorkspaceFileEntry => Boolean(entry))
+  const projectionRoot = target.workspaceRealPath
+  const projected = (await Promise.all(entries.map((entry) => toSafeEntry(projectionRoot, entry, options)))).filter(
+    (entry): entry is WebUiWorkspaceFileEntry => Boolean(entry)
+  )
   projected.sort((left, right) => {
     if (left.isDirectory !== right.isDirectory) return left.isDirectory ? -1 : 1
     return left.name.localeCompare(right.name)

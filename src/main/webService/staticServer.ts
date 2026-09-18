@@ -104,7 +104,7 @@ export const createWebUiStaticServer = ({
     const url = new URL(request.url ?? '/', 'http://webui.local')
 
     if (url.pathname === '/events') {
-      if (!isWebUiRequestAuthorized(request, url, getAuthKey())) {
+      if (!isWebUiRequestAuthorized(request, getAuthKey())) {
         response.writeHead(401, { 'Content-Type': 'text/plain; charset=utf-8' })
         response.end('Unauthorized')
         return

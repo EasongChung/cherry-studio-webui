@@ -1,5 +1,5 @@
 // WebUI desktop bridge
-import { randomUUID } from 'node:crypto'
+import { createHash, createHmac, randomUUID, timingSafeEqual } from 'node:crypto'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -62,7 +62,7 @@ type WebUiApiRouteResult = {
   readonly status: number
   readonly body?: unknown
   readonly rawBody?: Buffer
-  readonly headers?: Readonly<Record<string, string | number>>
+  readonly headers?: Readonly<Record<string, string | number | readonly string[]>>
 }
 
 type WebUiSendMessageBody = {
@@ -105,8 +105,12 @@ const jsonHeaders = {
 }
 
 const authHeaderName = 'x-cherry-webui-key'
-/** HttpOnly remember-verification cookie name. The value is the URL-encoded access key. */
-const authCookieName = 'cherry_webui_key'
+/** HttpOnly cookie holding a signed, expiring session token — never the access key itself. */
+const authCookieName = 'cherry_webui_session'
+/** Superseded cookie that stored the raw access key; purged on the next successful login. */
+const legacyAuthCookieName = 'cherry_webui_key'
+/** Session lifetime when remember-verification is off (browser session is not reliable enough). */
+const WEBUI_SESSION_DEFAULT_SECONDS = 12 * 60 * 60
 
 export const isWebUiApiRequest = (requestUrl?: string) => {
   if (!requestUrl) return false
@@ -150,29 +154,45 @@ const readCookieValue = (request: IncomingMessage, name: string): string | undef
   return undefined
 }
 
-const decodeRememberedKey = (raw: string | undefined): string => {
-  if (!raw) return ''
-  try {
-    return decodeURIComponent(raw)
-  } catch {
-    return ''
-  }
+const digestAuthKey = (key: string) => createHash('sha256').update(normalizeAuthKey(key)).digest()
+
+/** Constant-time comparison — a plain === leaks the key prefix through response timing. */
+const keysMatch = (provided: string, expected: string) => timingSafeEqual(digestAuthKey(provided), digestAuthKey(expected))
+
+const createSessionToken = (authKey: string, ttlSeconds: number) => {
+  const expiresAt = Date.now() + ttlSeconds * 1000
+  const payload = String(expiresAt)
+  return `${payload}.${createHmac('sha256', authKey).update(payload).digest('base64url')}`
 }
 
-export const isWebUiRequestAuthorized = (request: IncomingMessage, url: URL, authKey: string) => {
+// Stateless: the HMAC key is the access key, so rotating the key invalidates every session.
+const isSessionTokenValid = (token: string | undefined, authKey: string) => {
+  if (!token) return false
+  const separator = token.indexOf('.')
+  if (separator <= 0) return false
+
+  const payload = token.slice(0, separator)
+  const signature = token.slice(separator + 1)
+  const expiresAt = Number(payload)
+  if (!Number.isFinite(expiresAt) || expiresAt <= Date.now()) return false
+
+  const expected = createHmac('sha256', authKey).update(payload).digest('base64url')
+  if (signature.length !== expected.length) return false
+  return timingSafeEqual(Buffer.from(signature), Buffer.from(expected))
+}
+
+export const isWebUiRequestAuthorized = (request: IncomingMessage, authKey: string) => {
   const expectedKey = normalizeAuthKey(authKey)
   // Access key is mandatory — empty key rejects all requests.
   if (!expectedKey) return false
 
   const headerValue = request.headers[authHeaderName]
   const providedKey =
-    typeof headerValue === 'string'
-      ? headerValue
-      : Array.isArray(headerValue)
-        ? headerValue[0]
-        : (url.searchParams.get('key') ?? decodeRememberedKey(readCookieValue(request, authCookieName)))
+    typeof headerValue === 'string' ? headerValue : Array.isArray(headerValue) ? headerValue[0] : undefined
+  if (providedKey !== undefined && keysMatch(providedKey, expectedKey)) return true
 
-  return normalizeAuthKey(providedKey ?? '') === expectedKey
+  // EventSource cannot send headers, so the stream authenticates with the session cookie.
+  return isSessionTokenValid(readCookieValue(request, authCookieName), expectedKey)
 }
 
 const unauthorized = (): WebUiApiRouteResult => ({
@@ -708,7 +728,7 @@ export const createWebUiApiRouter = ({
         status: 200,
         body: {
           authRequired: Boolean(normalizeAuthKey(getAuthKey())),
-          authenticated: isWebUiRequestAuthorized(request, url, getAuthKey()),
+          authenticated: isWebUiRequestAuthorized(request, getAuthKey()),
           language: getLanguage(),
           // WebUI desktop bridge
           userName: application.get('PreferenceService').get('app.user.name'),
@@ -735,23 +755,11 @@ export const createWebUiApiRouter = ({
         | { readonly key?: unknown; readonly rememberSeconds?: unknown }
         | undefined
       const candidateKey = typeof body?.key === 'string' ? body.key : ''
-      if (normalizeAuthKey(candidateKey) !== expectedKey) return unauthorized()
+      if (!keysMatch(candidateKey, expectedKey)) return unauthorized()
 
       const rememberSeconds = typeof body?.rememberSeconds === 'number' ? body.rememberSeconds : 0
-
-      // rememberSeconds === 0 clears any previously issued remember cookie.
-      if (rememberSeconds === 0) {
-        return {
-          status: 200,
-          body: { ok: true },
-          headers: {
-            'Set-Cookie': `${authCookieName}=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0`
-          }
-        }
-      }
-
       const supportedDurations = [3 * 60 * 60, 24 * 60 * 60, 7 * 24 * 60 * 60]
-      if (!supportedDurations.includes(rememberSeconds)) {
+      if (rememberSeconds !== 0 && !supportedDurations.includes(rememberSeconds)) {
         return {
           status: 400,
           body: {
@@ -761,16 +769,21 @@ export const createWebUiApiRouter = ({
         }
       }
 
+      // rememberSeconds only picks the token lifetime; the cookie never carries the access key.
+      const ttlSeconds = rememberSeconds > 0 ? rememberSeconds : WEBUI_SESSION_DEFAULT_SECONDS
       return {
         status: 200,
         body: { ok: true },
         headers: {
-          'Set-Cookie': `${authCookieName}=${encodeURIComponent(expectedKey)}; HttpOnly; SameSite=Lax; Max-Age=${rememberSeconds}; Path=/`
+          'Set-Cookie': [
+            `${authCookieName}=${encodeURIComponent(createSessionToken(expectedKey, ttlSeconds))}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${ttlSeconds}`,
+            `${legacyAuthCookieName}=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0`
+          ]
         }
       }
     }
 
-    if (!isWebUiRequestAuthorized(request, url, getAuthKey())) return unauthorized()
+    if (!isWebUiRequestAuthorized(request, getAuthKey())) return unauthorized()
 
     const fileEntryMatch = pathname.match(fileEntryPath)
     if (fileEntryMatch) {
@@ -851,8 +864,7 @@ export const createWebUiApiRouter = ({
             url.searchParams.get('search') ?? '',
             {
               appRootPath: application.getPath('app.root'),
-              executablePath: process.execPath,
-              homePath: application.getPath('sys.home')
+              executablePath: process.execPath
             }
           )
           return { status: 200, body: result }
@@ -862,16 +874,14 @@ export const createWebUiApiRouter = ({
             status: 200,
             body: await readWebUiWorkspaceTextFile(session.workspace.path, requestedPath, {
               appRootPath: application.getPath('app.root'),
-              executablePath: process.execPath,
-              homePath: application.getPath('sys.home')
+              executablePath: process.execPath
             })
           }
         }
 
         const preview = await readWebUiWorkspaceBinaryPreview(session.workspace.path, requestedPath, {
           appRootPath: application.getPath('app.root'),
-          executablePath: process.execPath,
-          homePath: application.getPath('sys.home')
+          executablePath: process.execPath
         })
         return {
           status: 200,

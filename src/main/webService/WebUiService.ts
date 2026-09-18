@@ -61,7 +61,7 @@ export const normalizeWebUiHost = (host = WEBUI_DEFAULT_HOST) => {
 }
 
 @Injectable('WebUiService')
-@DependsOn(['PreferenceService', 'CacheService', 'DataApiService', 'AgentSessionRuntimeService'])
+@DependsOn(['AgentSessionRuntimeService'])
 @ServicePhase(Phase.WhenReady)
 export class WebUiService extends BaseService implements Activatable {
   private staticServer?: WebUiStaticServer
