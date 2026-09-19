@@ -139,7 +139,7 @@ allowBuilds:
   onnxruntime-node: true
   protobufjs: true
   registry-js: true
-  selection-hook: true
+  selection-hook: false
   sharp: true
   tesseract.js: true
   unrs-resolver: true
