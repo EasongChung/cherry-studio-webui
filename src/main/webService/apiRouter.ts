@@ -1457,7 +1457,7 @@ export const createWebUiApiRouter = ({
         // Browser files are promoted into Cherry's native file store before the
         // canonical agent-session send path receives them.
         const fileManager = application.get('FileManager')
-        const createdEntryIds: Parameters<typeof fileManager.batchPermanentDelete>[0] = []
+        const createdEntryIds: string[] = []
         try {
           const fileParts: CherryMessagePart[] = []
           for (const attachment of body.attachments) {
@@ -1495,7 +1495,7 @@ export const createWebUiApiRouter = ({
           })
         } catch (error) {
           if (createdEntryIds.length > 0) {
-            void fileManager.batchPermanentDelete(createdEntryIds).catch(() => undefined)
+            void Promise.all(createdEntryIds.map((id: string) => fileManager.permanentDelete(id))).catch(() => undefined)
           }
           throw error
         }
